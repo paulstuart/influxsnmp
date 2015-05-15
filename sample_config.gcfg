@@ -1,6 +1,7 @@
 
 ; multiple snmp devices can be specified
 ; their config name must match a mib config name
+; or an alternate config name can be used
 ; or there must be a wildcard mib configured -- named '*'
 
 [snmp "myrouter"]
@@ -15,6 +16,30 @@ freq   = 30
 prefix = home.router
 portfile =  sample_ports.txt
 
+[snmp "switch"]
+host   = 192.168.1.2
+community = secret
+port   = 161 
+timeout = 20
+retries = 5
+repeat = 0
+freq   = 30
+prefix = home.switch
+portfile =  sample_ports.txt
+
+[snmp "switch2"]
+host   = 192.168.1.3
+community = secret
+port   = 161 
+timeout = 20
+retries = 5
+repeat = 0
+freq   = 30
+prefix = home.switch
+portfile =  sample_ports.txt
+;use 'switch' config
+config = switch
+
 ; this is a wildcard -- becomes default 
 ; if a 'snmp' section name is not otherwise specified
 [mibs "*"]
@@ -24,11 +49,22 @@ column = ifHCInUcastPkts
 column = ifHCOutOctets
 column = ifHCOutUcastPkts
 
-[influx]
+[mibs "switch"]
+name = ifXEntry
+column = ifHCInOctets
+column = ifHCOutOctets
+
+[influx "*"]
 host = localhost:8086
 db   = dbname
 user = username
 password = password
+
+[influx "switch"]
+host = 192.168.1.254:8086
+db   = otherdb
+user = othername
+password = otherpass 
 
 ; web status monitor
 [http]
