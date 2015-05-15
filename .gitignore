@@ -23,8 +23,8 @@ _testmain.go
 *.test
 *.prof
 
-# build artifact
-influxsnmp
+# ignore build artifact but allow init script of same name
+/influxsnmp
 
 # normal working files
 config.gcfg
