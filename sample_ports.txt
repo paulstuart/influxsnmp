@@ -1,0 +1,4 @@
+# snmp_column_name   label_for_metrics  
+xe-0/0/1     the_interwebz
+xe-0/0/2     my_network
+

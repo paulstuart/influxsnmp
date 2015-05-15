@@ -1,0 +1,37 @@
+
+; multiple snmp devices can be specified
+; their config name must match a mib config name
+; or there must be a wildcard mib configured -- named '*'
+
+[snmp "myrouter"]
+host   = 192.168.1.1
+community = public
+port   = 161 
+timeout = 20
+retries = 5
+repeat = 0
+freq   = 30
+;debug  = false
+prefix = home.router
+portfile =  sample_ports.txt
+
+; this is a wildcard -- becomes default 
+; if a 'snmp' section name is not otherwise specified
+[mibs "*"]
+name = ifXEntry
+column = ifHCInOctets
+column = ifHCInUcastPkts
+column = ifHCOutOctets
+column = ifHCOutUcastPkts
+
+[influx]
+host = localhost:8086
+db   = dbname
+user = username
+password = password
+
+; web status monitor
+[http]
+port   = 8086 
+
+
