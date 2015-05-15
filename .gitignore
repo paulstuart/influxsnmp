@@ -22,3 +22,12 @@ _testmain.go
 *.exe
 *.test
 *.prof
+
+# build artifact
+influxsnmp
+
+# normal working files
+config.gcfg
+ports.txt
+
+log
