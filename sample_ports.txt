@@ -1,6 +1,3 @@
-# snmp_column   label_for_metrics         Description
-#ge-0/0/30       aws.direct
-#ge-0/0/30.0     aws.direct.0
-xe-0/0/21       aws.direct
-#xe-0/0/21.0     aws.direct.0
+# snmp_column   label_for_metrics         
+xe-0/0/1        aws_direct
 
