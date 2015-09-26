@@ -40,7 +40,7 @@ func getPoint(cfg *SnmpConfig, pdu gosnmp.SnmpPDU) *pduValue {
 	col := cfg.labels[cfg.asOID[suffix]]
 	name, ok := oidToName[root]
 	if verbose {
-		log.Println("ROOT:", root, "SUFFIX:", suffix, "COL:", col, "NAME:", name, "ORIG:", pdu.Name, "VALUE:",pdu.Value)
+		log.Println("ROOT:", root, "SUFFIX:", suffix, "COL:", col, "NAME:", "VALUE:",pdu.Value)
 	}
 	if !ok {
 		log.Printf("Invalid oid: %s\n", pdu.Name)

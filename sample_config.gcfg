@@ -64,7 +64,7 @@ db   = otherdb
 user = othername
 password = otherpass 
 
-; web status monitor
+; web status monitor - set port to 0 to disable
 [http]
 port   = 8086 
 

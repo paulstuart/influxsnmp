@@ -62,14 +62,18 @@ func (cfg *InfluxConfig) Connect() error {
 }
 
 func (cfg *InfluxConfig) Init() {
+    if verbose {
 	log.Println("Connecting to:", cfg.Host)
+    }
 	cfg.iChan = make(chan *client.BatchPoints, 65535)
 	if err := cfg.Connect(); err != nil {
 		log.Println("failed connecting to:", cfg.Host)
 		log.Println("error:", err)
 		log.Fatal(err)
 	}
+    if verbose {
 	log.Println("Connected to:", cfg.Host)
+    }
 
 	go influxEmitter(cfg)
 }

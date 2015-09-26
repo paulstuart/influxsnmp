@@ -67,6 +67,7 @@ type MibConfig struct {
 }
 
 var (
+    quit       = make(chan struct{})
 	verbose    bool
 	startTime  = time.Now()
 	testing    bool
@@ -337,6 +338,8 @@ func main() {
 	} else {
 		if httpPort > 0 {
 			webServer(httpPort)
-		}
+		} else {
+            <- quit
+        }
 	}
 }
