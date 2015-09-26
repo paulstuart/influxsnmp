@@ -28,61 +28,48 @@ const (
 	maxOids = 60 // const in gosnmp
 )
 
-// save snmp data so the collected results can be sent off in bulk
-func addValue(ctrl *Control, series *InfluxSeries, pdu gosnmp.SnmpPDU) error {
-	i := strings.LastIndex(pdu.Name, ".")
-	root := pdu.Name[1:i]
-	suffix := pdu.Name[i+1:]
-	switch pdu.Type {
-	case gosnmp.OctetString:
-		if root == ctrl.nameOid {
-			b := pdu.Value.([]byte)
-			ctrl.found[suffix] = string(b)
-		}
-	default:
-		name, ok := oidToName[root]
-		if !ok {
-			name = root
-		}
-		if _, ok := ctrl.usable[name]; !ok {
-			return nil
-		}
-		what := ctrl.found[suffix]
-		if col, ok := ctrl.labels[what]; ok {
-			key := fmt.Sprintf("%s.%s", name, col)
-			series.Data = append(series.Data, InfluxData{key, pdu.Value})
-		}
-	}
-	return nil
+type pduValue struct {
+	name, column string
+	value        interface{}
 }
 
-func addToSeries(c *SnmpConfig, series *InfluxSeries, pdu gosnmp.SnmpPDU) error {
+func getPoint(cfg *SnmpConfig, pdu gosnmp.SnmpPDU) *pduValue {
 	i := strings.LastIndex(pdu.Name, ".")
 	root := pdu.Name[1:i]
 	suffix := pdu.Name[i+1:]
-	col := c.labels[c.asOID[suffix]]
+	col := cfg.labels[cfg.asOID[suffix]]
 	name, ok := oidToName[root]
+	if verbose {
+		log.Println("ROOT:", root, "SUFFIX:", suffix, "COL:", col, "NAME:", name, "ORIG:", pdu.Name, "VALUE:",pdu.Value)
+	}
 	if !ok {
-		return fmt.Errorf("Invalid oid: %s", pdu.Name)
+		log.Printf("Invalid oid: %s\n", pdu.Name)
+		return nil
 	}
 	if len(col) == 0 {
+		log.Println("empty col for:", cfg.asOID[suffix])
 		return nil // not an OID of interest
 	}
-	name += "." + col
-	series.Data = append(series.Data, InfluxData{name, pdu.Value})
-	return nil
+	return &pduValue{name, col, pdu.Value}
 }
 
-func snmpStats(client *gosnmp.GoSNMP, cfg *SnmpConfig) error {
+func snmpStats(snmp *gosnmp.GoSNMP, cfg *SnmpConfig) error {
 	snmpReqs++
 	now := time.Now()
-	series := InfluxSeries{When: now.Unix() * 1000, prefix: cfg.Prefix}
+	if cfg == nil {
+		log.Fatal("cfg is nil")
+	}
+	if cfg.Influx == nil {
+		log.Fatal("influx cfg is nil")
+	}
+	bps := cfg.Influx.BP()
+	// we can only get 'maxOids' worth of snmp requests at a time
 	for i := 0; i < len(cfg.oids); i += maxOids {
 		end := i + maxOids
 		if end > len(cfg.oids) {
 			end = len(cfg.oids)
 		}
-		pkt, err := client.Get(cfg.oids[i:end])
+		pkt, err := snmp.Get(cfg.oids[i:end])
 		if err != nil {
 			errLog("SNMP (%s) get error: %s\n", cfg.Host, err)
 			errorSNMP++
@@ -90,11 +77,20 @@ func snmpStats(client *gosnmp.GoSNMP, cfg *SnmpConfig) error {
 			return err
 		}
 		snmpGets++
+		if verbose {
+			log.Println("SNMP GET CNT:", len(pkt.Variables))
+		}
 		for _, pdu := range pkt.Variables {
-			addToSeries(cfg, &series, pdu)
+			val := getPoint(cfg, pdu)
+			if val == nil {
+				continue
+			}
+			pt := makePoint(cfg.Influx, val, now)
+			bps.Points = append(bps.Points, pt)
+
 		}
 	}
-	cfg.Influx.Send(series)
+	cfg.Influx.Send(bps)
 	return nil
 }
 

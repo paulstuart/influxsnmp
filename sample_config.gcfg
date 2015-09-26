@@ -24,7 +24,6 @@ timeout = 20
 retries = 5
 repeat = 0
 freq   = 30
-prefix = home.switch
 portfile =  sample_ports.txt
 
 [snmp "switch2"]
@@ -35,7 +34,6 @@ timeout = 20
 retries = 5
 repeat = 0
 freq   = 30
-prefix = home.switch
 portfile =  sample_ports.txt
 ;use 'switch' config
 config = switch

@@ -13,6 +13,7 @@ import (
 
 	"bitbucket.org/kardianos/osext"
 	"code.google.com/p/gcfg"
+	"github.com/influxdb/influxdb/client"
 	"github.com/soniah/gosnmp"
 )
 
@@ -40,11 +41,14 @@ type SnmpConfig struct {
 }
 
 type InfluxConfig struct {
-	Host     string `gcfg:"host"`
-	DB       string `gcfg:"db"`
-	User     string `gcfg:"user"`
-	Password string `gcfg:"password"`
-	iChan    chan InfluxSeries
+	Host      string `gcfg:"host"`
+	Port      int    `gcfg:"port"`
+	DB        string `gcfg:"db"`
+	User      string `gcfg:"user"`
+	Password  string `gcfg:"password"`
+	Retention string `gcfg:"retention"`
+	iChan     chan *client.BatchPoints
+	conn      *client.Client
 }
 
 type HTTPConfig struct {
@@ -63,28 +67,27 @@ type MibConfig struct {
 }
 
 var (
-	verbose              bool
-	startTime            = time.Now()
-	testing              bool
-	snmpNames            bool
-	repeat               = 0
-	freq                 = 30
-	httpPort             = 8080
-	oidToName            = make(map[string]string)
-	nameToOid            = make(map[string]string)
-	appdir, _            = osext.ExecutableFolder()
-	logDir               = filepath.Join(appdir, "log")
-	oidFile              = filepath.Join(appdir, "oids.txt")
-	configFile           = filepath.Join(appdir, "config.gcfg")
-	snmpHost, snmpPublic string
-	snmpDebug            bool
-	errorLog             *os.File
-	errorDuration        = time.Duration(10 * time.Minute)
-	errorPeriod          = errorDuration.String()
-	errorMax             = 100
-	errorName            string
-	cDebug               = make(chan bool)
-	snmpReqs, snmpGets   int
+	verbose    bool
+	startTime  = time.Now()
+	testing    bool
+	snmpNames  bool
+	repeat     = 0
+	freq       = 30
+	httpPort   = 8080
+	oidToName  = make(map[string]string)
+	nameToOid  = make(map[string]string)
+	appdir, _  = osext.ExecutableFolder()
+	logDir     = filepath.Join(appdir, "log")
+	oidFile    = filepath.Join(appdir, "oids.txt")
+	configFile = filepath.Join(appdir, "config.gcfg")
+	snmpDebug          bool
+	errorLog           *os.File
+	errorDuration      = time.Duration(10 * time.Minute)
+	errorPeriod        = errorDuration.String()
+	errorMax           = 100
+	errorName          string
+	cDebug             = make(chan bool)
+	snmpReqs, snmpGets int
 
 	cfg = struct {
 		Snmp    map[string]*SnmpConfig
@@ -254,8 +257,10 @@ func init() {
 	if len(cfg.General.OidFile) > 0 {
 		oidFile = cfg.General.OidFile
 	}
+
 	for _, s := range cfg.Snmp {
 		s.LoadPorts()
+		//s.Influx = &cfg.Influx
 	}
 	var ok bool
 	for name, c := range cfg.Snmp {
@@ -283,9 +288,8 @@ func init() {
 	f.Parse(os.Args[1:])
 	os.Mkdir(logDir, 0755)
 
-	for _, c := range cfg.Influx {
-		c.Init()
-	}
+	//   cfg.Influx.Init()
+
 	// now make sure each snmp device has a db
 	for name, c := range cfg.Snmp {
 		// default is to use name of snmp config, but it can be overridden
@@ -297,6 +301,7 @@ func init() {
 				fatal("No influx config for snmp device:", name)
 			}
 		}
+		c.Influx.Init()
 	}
 
 	var ferr error
@@ -330,6 +335,8 @@ func main() {
 	if repeat > 0 {
 		wg.Wait()
 	} else {
-		webServer(httpPort)
+		if httpPort > 0 {
+			webServer(httpPort)
+		}
 	}
 }
