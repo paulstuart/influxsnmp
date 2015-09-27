@@ -1,6 +1,6 @@
 influxsnmp
 ==========
-Poll network devices via SNMP and save the data in InfluxDB
+Poll network devices via SNMP and save the data in InfluxDB (version 0.9.x)
 
 It requires mib oids to be "pre-digested", e.g.,
 
