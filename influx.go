@@ -21,18 +21,17 @@ func (cfg *InfluxConfig) BP() *client.BatchPoints {
 	}
 }
 
-func makePoint(cfg *InfluxConfig, val *pduValue, when time.Time) client.Point {
+func makePoint(host string, val *pduValue, when time.Time) client.Point {
 	return client.Point{
 		Measurement: val.name,
 		Tags: map[string]string{
-			"host":   cfg.Host,
+			"host":   host,
 			"column": val.column,
 		},
 		Fields: map[string]interface{}{
 			"value": val.value,
 		},
 		Time:      when,
-		Precision: "s",
 	}
 }
 

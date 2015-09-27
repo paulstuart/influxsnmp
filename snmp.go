@@ -85,7 +85,7 @@ func snmpStats(snmp *gosnmp.GoSNMP, cfg *SnmpConfig) error {
 			if val == nil {
 				continue
 			}
-			pt := makePoint(cfg.Influx, val, now)
+			pt := makePoint(cfg.Host, val, now)
 			bps.Points = append(bps.Points, pt)
 
 		}
