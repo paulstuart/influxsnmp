@@ -59,11 +59,6 @@ div {
 <h1>Netstats</h1>
 <p>Started: {{.Started}}</p>
 <p>Uptime: {{.Uptime}}</p>
-<p>Saved: {{.Saved}}</p>
-<p>Save Errors (total): {{.SaveErrors}}</p>
-<p>SNMP Errors (total): {{.SNMPErrors}}</p>
-<p>SNMP Requests (total): {{.SNMPRequests}}</p>
-<p>SNMP Replies (total): {{.SNMPReplies}}</p>
 <p><a href="/logs">Logs files</a></p>
 <h1>Config</h1>
 {{ range $key,$snmp := .SNMP }}
@@ -76,12 +71,25 @@ div {
 <p>Last Error: {{$snmp.LastError}}</p>
 <p>DB Host: {{$snmp.Influx.Hostname}}</p>
 <p>DB Name: {{$snmp.Influx.DB}}</p>
-</div>
-{{ end}}
+<p>Errors: {{.Errors}}</p>
+<p>Requests: {{.Requests}}</p>
+<p>Replies: {{.Gets}}</p>
 <form action="/snmp/debug" method="POST">
 SNMP Debugging:<button type="submit" value="{{.DebugAction}}">{{.DebugAction}}</button>
 <input type="hidden" name="action" id="action" value="{{.DebugAction}}">
+<input type="hidden" name="host" id="host" value="{{.Host}}">
 </form>
+</div>
+{{ end}}
+{{ range $key,$influx := .Influx }}
+<div>
+<p class="snmp">Influx {{$key}}</p>
+<p>Host: {{$influx.Host}}</p>
+<p>Database: {{$influx.DB}}</p>
+<p>Sent: {{$influx.Sent}}</p>
+<p>Errors: {{$influx.Errors}}</p>
+</div>
+{{ end }}
 <p><a href="/debug/pprof/">Profiler</a></p>
 </body>
 </html>
@@ -127,26 +135,19 @@ var logs = template.Must(template.New("logs").Parse(logfiles))
 func HomePage(w http.ResponseWriter, r *http.Request) {
 	const layout = "Jan 2, 2006 at 3:04pm (MST)"
 	data := struct {
-		Period, Started, Uptime, DB, LogFile, DebugAction string
-		Saved, SaveErrors                                 int64
-		SNMPErrors, SNMPRequests, SNMPReplies             int
-		SNMP                                              map[string]*SnmpConfig
+		Period, Started string
+		Uptime          string
+		DB, LogFile     string
+		DebugAction     string
+		SNMP            map[string]*SnmpConfig
+		Influx          map[string]*InfluxConfig
 	}{
-		Saved:        influxCount,
-		LogFile:      errorName,
-		Started:      startTime.Format(layout),
-		Uptime:       time.Now().Sub(startTime).String(),
-		SaveErrors:   errorInflux,
-		Period:       errorPeriod,
-		SNMPErrors:   errorSNMP,
-		SNMPRequests: snmpReqs,
-		SNMPReplies:  snmpGets,
-		SNMP:         cfg.Snmp,
-	}
-	if snmpDebug {
-		data.DebugAction = "disable"
-	} else {
-		data.DebugAction = "enable"
+		LogFile: errorName,
+		Started: startTime.Format(layout),
+		Uptime:  time.Now().Sub(startTime).String(),
+		Period:  errorPeriod,
+		SNMP:    cfg.Snmp,
+		Influx:  cfg.Influx,
 	}
 
 	if err := tmpl.Execute(w, data); err != nil {
@@ -182,8 +183,14 @@ func DebugPage(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "POST" {
 		r.ParseForm()
 		action := r.Form.Get("action")
-		snmpDebug = (action == "enable")
-		cDebug <- snmpDebug
+		host := r.Form.Get("host")
+		fmt.Println("debug action:", action, "host:", host, "debug", (action == "enable"))
+		for _, c := range cfg.Snmp {
+			if host == c.Host {
+				c.debugging <- (action == "enable")
+				break
+			}
+		}
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	}
 }

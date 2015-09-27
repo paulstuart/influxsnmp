@@ -40,7 +40,7 @@ func getPoint(cfg *SnmpConfig, pdu gosnmp.SnmpPDU) *pduValue {
 	col := cfg.labels[cfg.asOID[suffix]]
 	name, ok := oidToName[root]
 	if verbose {
-		log.Println("ROOT:", root, "SUFFIX:", suffix, "COL:", col, "NAME:", "VALUE:",pdu.Value)
+		log.Println("ROOT:", root, "SUFFIX:", suffix, "COL:", col, "NAME:", "VALUE:", pdu.Value)
 	}
 	if !ok {
 		log.Printf("Invalid oid: %s\n", pdu.Name)
@@ -54,7 +54,6 @@ func getPoint(cfg *SnmpConfig, pdu gosnmp.SnmpPDU) *pduValue {
 }
 
 func snmpStats(snmp *gosnmp.GoSNMP, cfg *SnmpConfig) error {
-	snmpReqs++
 	now := time.Now()
 	if cfg == nil {
 		log.Fatal("cfg is nil")
@@ -69,14 +68,15 @@ func snmpStats(snmp *gosnmp.GoSNMP, cfg *SnmpConfig) error {
 		if end > len(cfg.oids) {
 			end = len(cfg.oids)
 		}
+		cfg.incRequests()
 		pkt, err := snmp.Get(cfg.oids[i:end])
 		if err != nil {
 			errLog("SNMP (%s) get error: %s\n", cfg.Host, err)
-			errorSNMP++
+			cfg.incErrors()
 			cfg.LastError = now
 			return err
 		}
-		snmpGets++
+		cfg.incGets()
 		if verbose {
 			log.Println("SNMP GET CNT:", len(pkt.Variables))
 		}
@@ -121,9 +121,6 @@ func snmpClient(s *SnmpConfig) (*gosnmp.GoSNMP, error) {
 		Timeout:   time.Duration(s.Timeout) * time.Second,
 		Retries:   s.Retries,
 	}
-	if snmpDebug {
-		client.Logger = s.DebugLog()
-	}
 	err := client.Connect()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -142,12 +139,12 @@ func (s *SnmpConfig) DebugLog() *log.Logger {
 }
 
 func (s *SnmpConfig) Gather(count int, wg *sync.WaitGroup) {
+	debug := false
 	client, err := snmpClient(s)
 	if err != nil {
 		fatal(err)
 	}
 	defer client.Conn.Close()
-	spew(s.Host, "OIDS -", s.Prefix)
 	spew(strings.Join(s.oids, "\n"))
 	c := time.Tick(time.Duration(freq) * time.Second)
 	for {
@@ -177,12 +174,15 @@ func (s *SnmpConfig) Gather(count int, wg *sync.WaitGroup) {
 			select {
 			case <-c:
 				break LOOP
-			case snmpDebug = <-cDebug:
-				if snmpDebug && client.Logger == nil {
+			case debug := <-s.debugging:
+				log.Println("debugging:", debug)
+				if debug && client.Logger == nil {
 					client.Logger = s.DebugLog()
 				} else {
 					client.Logger = nil
 				}
+			case status := <-s.enabled:
+				status <- debug
 			}
 		}
 	}

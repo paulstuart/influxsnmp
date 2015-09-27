@@ -10,10 +10,6 @@ import (
 	"github.com/influxdb/influxdb/client"
 )
 
-var (
-	influxCount, errorInflux int64
-)
-
 func (cfg *InfluxConfig) BP() *client.BatchPoints {
 	if len(cfg.Retention) == 0 {
 		cfg.Retention = "default"
@@ -62,18 +58,18 @@ func (cfg *InfluxConfig) Connect() error {
 }
 
 func (cfg *InfluxConfig) Init() {
-    if verbose {
-	log.Println("Connecting to:", cfg.Host)
-    }
+	if verbose {
+		log.Println("Connecting to:", cfg.Host)
+	}
 	cfg.iChan = make(chan *client.BatchPoints, 65535)
 	if err := cfg.Connect(); err != nil {
 		log.Println("failed connecting to:", cfg.Host)
 		log.Println("error:", err)
 		log.Fatal(err)
 	}
-    if verbose {
-	log.Println("Connected to:", cfg.Host)
-    }
+	if verbose {
+		log.Println("Connected to:", cfg.Host)
+	}
 
 	go influxEmitter(cfg)
 }
@@ -104,13 +100,14 @@ func influxEmitter(cfg *InfluxConfig) {
 			// keep trying until we get it (don't drop the data)
 			for {
 				if _, err := cfg.conn.Write(*data); err != nil {
+					cfg.incErrors()
 					log.Println("influxdb write error:", err)
 					// try again in a bit
 					// TODO: this could be better
 					time.Sleep(30 * time.Second)
 					continue
 				} else {
-					influxCount++
+					cfg.incSent()
 				}
 				break
 			}

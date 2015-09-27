@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"bitbucket.org/kardianos/osext"
@@ -27,8 +28,6 @@ type SnmpConfig struct {
 	Timeout   int    `gcfg:"timeout"`
 	Repeat    int    `gcfg:"repeat"`
 	Freq      int    `gcfg:"freq"`
-	Debug     bool   `gcfg:"debug"`
-	Prefix    string `gcfg:"prefix"`
 	PortFile  string `gcfg:"portfile"`
 	Config    string `gcfg:"config"`
 	labels    map[string]string
@@ -38,6 +37,11 @@ type SnmpConfig struct {
 	mib       *MibConfig
 	Influx    *InfluxConfig
 	LastError time.Time
+	Requests  int64
+	Gets      int64
+	Errors    int64
+	debugging chan bool
+	enabled   chan chan bool
 }
 
 type InfluxConfig struct {
@@ -49,6 +53,8 @@ type InfluxConfig struct {
 	Retention string `gcfg:"retention"`
 	iChan     chan *client.BatchPoints
 	conn      *client.Client
+	Sent      int64
+	Errors    int64
 }
 
 type HTTPConfig struct {
@@ -67,28 +73,25 @@ type MibConfig struct {
 }
 
 var (
-    quit       = make(chan struct{})
-	verbose    bool
-	startTime  = time.Now()
-	testing    bool
-	snmpNames  bool
-	repeat     = 0
-	freq       = 30
-	httpPort   = 8080
-	oidToName  = make(map[string]string)
-	nameToOid  = make(map[string]string)
-	appdir, _  = osext.ExecutableFolder()
-	logDir     = filepath.Join(appdir, "log")
-	oidFile    = filepath.Join(appdir, "oids.txt")
-	configFile = filepath.Join(appdir, "config.gcfg")
-	snmpDebug          bool
-	errorLog           *os.File
-	errorDuration      = time.Duration(10 * time.Minute)
-	errorPeriod        = errorDuration.String()
-	errorMax           = 100
-	errorName          string
-	cDebug             = make(chan bool)
-	snmpReqs, snmpGets int
+	quit          = make(chan struct{})
+	verbose       bool
+	startTime     = time.Now()
+	testing       bool
+	snmpNames     bool
+	repeat        = 0
+	freq          = 30
+	httpPort      = 8080
+	oidToName     = make(map[string]string)
+	nameToOid     = make(map[string]string)
+	appdir, _     = osext.ExecutableFolder()
+	logDir        = filepath.Join(appdir, "log")
+	oidFile       = filepath.Join(appdir, "oids.txt")
+	configFile    = filepath.Join(appdir, "config.gcfg")
+	errorLog      *os.File
+	errorDuration = time.Duration(10 * time.Minute)
+	errorPeriod   = errorDuration.String()
+	errorMax      = 100
+	errorName     string
 
 	cfg = struct {
 		Snmp    map[string]*SnmpConfig
@@ -102,6 +105,15 @@ var (
 func fatal(v ...interface{}) {
 	log.SetOutput(os.Stderr)
 	log.Fatalln(v...)
+}
+
+func (c *SnmpConfig) DebugAction() string {
+	debug := make(chan bool)
+	c.enabled <- debug
+	if <-debug {
+		return "disable"
+	}
+	return "enable"
 }
 
 func (c *SnmpConfig) LoadPorts() {
@@ -125,6 +137,26 @@ func (c *SnmpConfig) LoadPorts() {
 		}
 		c.labels[f[0]] = f[1]
 	}
+}
+
+func (c *SnmpConfig) incRequests() {
+	atomic.AddInt64(&c.Requests, 1)
+}
+
+func (c *SnmpConfig) incGets() {
+	atomic.AddInt64(&c.Gets, 1)
+}
+
+func (c *SnmpConfig) incErrors() {
+	atomic.AddInt64(&c.Errors, 1)
+}
+
+func (c *InfluxConfig) incErrors() {
+	atomic.AddInt64(&c.Errors, 1)
+}
+
+func (c *InfluxConfig) incSent() {
+	atomic.AddInt64(&c.Sent, 1)
 }
 
 // loads [last_octet]name for device
@@ -213,7 +245,6 @@ func flags() *flag.FlagSet {
 	var f flag.FlagSet
 	f.BoolVar(&testing, "testing", testing, "print data w/o saving")
 	f.BoolVar(&snmpNames, "names", snmpNames, "print column names and exit")
-	f.BoolVar(&snmpDebug, "debug", snmpDebug, "enable SNMP debugging")
 	f.StringVar(&configFile, "config", configFile, "config file")
 	f.BoolVar(&verbose, "verbose", verbose, "verbose mode")
 	f.IntVar(&repeat, "repeat", repeat, "number of times to repeat")
@@ -261,7 +292,8 @@ func init() {
 
 	for _, s := range cfg.Snmp {
 		s.LoadPorts()
-		//s.Influx = &cfg.Influx
+		s.debugging = make(chan bool)
+		s.enabled = make(chan chan bool)
 	}
 	var ok bool
 	for name, c := range cfg.Snmp {
@@ -288,8 +320,6 @@ func init() {
 	f = flags()
 	f.Parse(os.Args[1:])
 	os.Mkdir(logDir, 0755)
-
-	//   cfg.Influx.Init()
 
 	// now make sure each snmp device has a db
 	for name, c := range cfg.Snmp {
@@ -339,7 +369,7 @@ func main() {
 		if httpPort > 0 {
 			webServer(httpPort)
 		} else {
-            <- quit
-        }
+			<-quit
+		}
 	}
 }
