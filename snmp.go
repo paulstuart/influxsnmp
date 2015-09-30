@@ -201,7 +201,7 @@ func (s *SnmpConfig) Gather(count int, wg *sync.WaitGroup) {
 	if len(s.PortFile) == 0 {
 		fn = bulkStats
 	}
-	c := time.Tick(time.Duration(freq) * time.Second)
+	c := time.Tick(time.Duration(s.Freq) * time.Second)
 	for {
 		err := fn(client, s)
 		if count > 0 {
