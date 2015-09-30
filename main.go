@@ -180,7 +180,7 @@ func (c *SnmpConfig) Translate() {
 			suffix := pdu.Name[i+1:]
 			name := string(pdu.Value.([]byte))
 			_, ok := c.labels[name]
-			if ok {
+			if len(c.PortFile) == 0 || ok {
 				c.asName[name] = suffix
 				c.asOID[suffix] = name
 			}
@@ -216,13 +216,17 @@ func (c *SnmpConfig) OIDs() {
 			for k := range c.asOID {
 				c.oids = append(c.oids, base+"."+k)
 			}
-		} else {
+		} else if c.mib.Scalers {
 			// or plain old scaler instances
 			c.oids = append(c.oids, base+".0")
+		} else {
+			c.oids = append(c.oids, base)
 		}
 	}
-	spew("COLUMNS", c.mib.Columns)
-	spew(c.oids)
+	if len(c.mib.Columns) > 0 {
+		spew("COLUMNS", c.mib.Columns)
+		spew(c.oids)
+	}
 }
 
 // load oid lookup data

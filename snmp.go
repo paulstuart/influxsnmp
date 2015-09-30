@@ -53,6 +53,26 @@ func getPoint(cfg *SnmpConfig, pdu gosnmp.SnmpPDU) *pduValue {
 	return &pduValue{name, col, pdu.Value}
 }
 
+func bulkPoint(cfg *SnmpConfig, pdu gosnmp.SnmpPDU) *pduValue {
+	i := strings.LastIndex(pdu.Name, ".")
+	root := pdu.Name[1:i]
+	suffix := pdu.Name[i+1:]
+	col := cfg.asOID[suffix]
+	name, ok := oidToName[root]
+	if verbose {
+		log.Println("ROOT:", root, "SUFFIX:", suffix, "COL:", col, "NAME:", "VALUE:", pdu.Value)
+	}
+	if !ok {
+		log.Printf("Invalid oid: %s\n", pdu.Name)
+		return nil
+	}
+	if len(col) == 0 {
+		log.Println("empty col for:", suffix)
+		return nil // not an OID of interest
+	}
+	return &pduValue{name, col, pdu.Value}
+}
+
 func snmpStats(snmp *gosnmp.GoSNMP, cfg *SnmpConfig) error {
 	now := time.Now()
 	if cfg == nil {
@@ -88,6 +108,37 @@ func snmpStats(snmp *gosnmp.GoSNMP, cfg *SnmpConfig) error {
 			pt := makePoint(cfg.Host, val, now)
 			bps.Points = append(bps.Points, pt)
 
+		}
+	}
+	cfg.Influx.Send(bps)
+	return nil
+}
+
+func bulkStats(snmp *gosnmp.GoSNMP, cfg *SnmpConfig) error {
+	now := time.Now()
+	if cfg == nil {
+		log.Fatal("cfg is nil")
+	}
+	if cfg.Influx == nil {
+		log.Fatal("influx cfg is nil")
+	}
+	bps := cfg.Influx.BP()
+	addPacket := func(pdu gosnmp.SnmpPDU) error {
+		val := bulkPoint(cfg, pdu)
+		if val == nil {
+			return fmt.Errorf("nil value")
+		}
+		pt := makePoint(cfg.Host, val, now)
+		bps.Points = append(bps.Points, pt)
+		return nil
+	}
+	for i := 0; i < len(cfg.oids); i += 1 {
+		cfg.incRequests()
+		if err := snmp.BulkWalk(cfg.oids[i], addPacket); err != nil {
+			errLog("SNMP (%s) get error: %s\n", cfg.Host, err)
+			cfg.incErrors()
+			cfg.LastError = now
+			return err
 		}
 	}
 	cfg.Influx.Send(bps)
@@ -146,9 +197,13 @@ func (s *SnmpConfig) Gather(count int, wg *sync.WaitGroup) {
 	}
 	defer client.Conn.Close()
 	spew(strings.Join(s.oids, "\n"))
+	fn := snmpStats
+	if len(s.PortFile) == 0 {
+		fn = bulkStats
+	}
 	c := time.Tick(time.Duration(freq) * time.Second)
 	for {
-		err := snmpStats(client, s)
+		err := fn(client, s)
 		if count > 0 {
 			count--
 			if count == 0 {

@@ -31,7 +31,7 @@ func makePoint(host string, val *pduValue, when time.Time) client.Point {
 		Fields: map[string]interface{}{
 			"value": val.value,
 		},
-		Time:      when,
+		Time: when,
 	}
 }
 
