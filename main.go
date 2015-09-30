@@ -308,9 +308,9 @@ func init() {
 		}
 		c.Translate()
 		c.OIDs()
-        if c.Freq == 0 {
-            c.Freq = freq
-        }
+		if c.Freq == 0 {
+			c.Freq = freq
+		}
 	}
 
 	// only run when one needs to see the interface names of the device
