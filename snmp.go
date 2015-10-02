@@ -105,6 +105,9 @@ func snmpStats(snmp *gosnmp.GoSNMP, cfg *SnmpConfig) error {
 			if val == nil {
 				continue
 			}
+			if val.value == nil {
+				continue
+			}
 			pt := makePoint(cfg.Host, val, now)
 			bps.Points = append(bps.Points, pt)
 
@@ -125,11 +128,10 @@ func bulkStats(snmp *gosnmp.GoSNMP, cfg *SnmpConfig) error {
 	bps := cfg.Influx.BP()
 	addPacket := func(pdu gosnmp.SnmpPDU) error {
 		val := bulkPoint(cfg, pdu)
-		if val == nil {
-			return fmt.Errorf("nil value")
+		if val != nil && val.value != nil {
+			pt := makePoint(cfg.Host, val, now)
+			bps.Points = append(bps.Points, pt)
 		}
-		pt := makePoint(cfg.Host, val, now)
-		bps.Points = append(bps.Points, pt)
 		return nil
 	}
 	for i := 0; i < len(cfg.oids); i += 1 {
