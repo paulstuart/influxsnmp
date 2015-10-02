@@ -361,14 +361,7 @@ func errMsg(msg string, err error) {
 	errLog("%s\t%s: %s\n", now.Format(layout), msg, err)
 }
 
-func ptest() {
-    val := &pduValue{column: "abc", value: nil}
-    pt := makePoint("localhost", val, time.Now())
-    fmt.Println("PT:",pt.MarshalString())
-}
-
 func main() {
-    ptest(); return
 	var wg sync.WaitGroup
 	defer func() {
 		errorLog.Close()
