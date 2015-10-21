@@ -54,13 +54,15 @@ column = ifHCInOctets
 column = ifHCOutOctets
 
 [influx "*"]
-host = localhost:8086
+host = localhost
+port = 8086
 db   = dbname
 user = username
 password = password
 
 [influx "switch"]
-host = 192.168.1.254:8086
+host = 192.168.1.254
+port = 8086
 db   = otherdb
 user = othername
 password = otherpass 

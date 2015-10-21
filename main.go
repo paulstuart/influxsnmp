@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"bitbucket.org/kardianos/osext"
-	"code.google.com/p/gcfg"
+	"github.com/kardianos/osext"
+	"gopkg.in/gcfg.v1"
 	"github.com/influxdb/influxdb/client"
 	"github.com/soniah/gosnmp"
 )
