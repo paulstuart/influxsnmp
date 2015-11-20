@@ -12,10 +12,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/kardianos/osext"
-	"gopkg.in/gcfg.v1"
 	"github.com/influxdb/influxdb/client"
+	"github.com/kardianos/osext"
 	"github.com/soniah/gosnmp"
+	"gopkg.in/gcfg.v1"
 )
 
 const layout = "2006-01-02 15:04:05"
@@ -229,22 +229,6 @@ func (c *SnmpConfig) OIDs() {
 	}
 }
 
-// load oid lookup data
-func init() {
-	data, err := ioutil.ReadFile(oidFile)
-	if err != nil {
-		log.Fatal(err)
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		f := strings.Fields(line)
-		if len(f) < 2 {
-			continue
-		}
-		nameToOid[f[0]] = f[1]
-		oidToName[f[1]] = f[0]
-	}
-}
-
 func flags() *flag.FlagSet {
 	var f flag.FlagSet
 	f.BoolVar(&testing, "testing", testing, "print data w/o saving")
@@ -255,6 +239,7 @@ func flags() *flag.FlagSet {
 	f.IntVar(&freq, "freq", freq, "delay (in seconds)")
 	f.IntVar(&httpPort, "http", httpPort, "http port")
 	f.StringVar(&logDir, "logs", logDir, "log directory")
+	f.StringVar(&oidFile, "oids", oidFile, "OIDs file")
 	f.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
 		f.VisitAll(func(flag *flag.Flag) {
@@ -292,6 +277,19 @@ func init() {
 	}
 	if len(cfg.General.OidFile) > 0 {
 		oidFile = cfg.General.OidFile
+	}
+	// load oid lookup data
+	data, err := ioutil.ReadFile(oidFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		nameToOid[f[0]] = f[1]
+		oidToName[f[1]] = f[0]
 	}
 
 	for _, s := range cfg.Snmp {
