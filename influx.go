@@ -3,113 +3,161 @@ package main
 import (
 	"fmt"
 	"log"
-	"net/url"
 	"strings"
 	"time"
 
-	"github.com/influxdata/influxdb/client"
+	client "github.com/influxdata/influxdb/client/v2"
 )
 
-func (cfg *InfluxConfig) BP() *client.BatchPoints {
-	if len(cfg.Retention) == 0 {
-		cfg.Retention = "default"
-	}
-	return &client.BatchPoints{
-		Points:          make([]client.Point, 0, maxOids),
-		Database:        cfg.DB,
-		RetentionPolicy: cfg.Retention,
-	}
+type Sender func(string, map[string]string, map[string]interface{}, time.Time) error
+
+// InfluxConfig defines connection requirements
+type InfluxConfig struct {
+	Host      string `gcfg:"host"`
+	Port      int    `gcfg:"port"`
+	DB        string `gcfg:"db"`
+	Username  string `gcfg:"user"`
+	Password  string `gcfg:"password"`
+	Retention string `gcfg:"retention"`
+	Batch     client.BatchPointsConfig
 }
 
-func makePoint(host string, val *pduValue, when time.Time) client.Point {
-	return client.Point{
-		Measurement: val.name,
-		Tags: map[string]string{
-			"host":   host,
-			"column": val.column,
-		},
-		Fields: map[string]interface{}{
-			"value": val.value,
-		},
-		Time: when,
-	}
+var (
+	debug    bool
+	flush    = make(chan struct{})
+	Keywords = strings.Fields(`
+	ALL           ALTER         ANY           AS            ASC           BEGIN
+	BY            CREATE        CONTINUOUS    DATABASE      DATABASES     DEFAULT
+	DELETE        DESC          DESTINATIONS  DIAGNOSTICS   DISTINCT      DROP
+	DURATION      END           EVERY         EXISTS        EXPLAIN       FIELD
+	FOR           FORCE         FROM          GRANT         GRANTS        GROUP
+	GROUPS        IF            IN            INF           INNER         INSERT
+	INTO          KEY           KEYS          LIMIT         SHOW          MEASUREMENT
+	MEASUREMENTS  NOT           OFFSET        ON            ORDER         PASSWORD
+	POLICY        POLICIES      PRIVILEGES    QUERIES       QUERY         READ
+	REPLICATION   RESAMPLE      RETENTION     REVOKE        SELECT        SERIES
+	SERVER        SERVERS       SET           SHARD         SHARDS        SLIMIT
+	SOFFSET       STATS         SUBSCRIPTION  SUBSCRIPTIONS TAG           TO
+	USER          USERS         VALUES        WHERE         WITH          WRITE
+	NAME          KILL
+	`)
+)
+
+func SenderFlush() {
+	log.Println("FLUSHING")
+	flush <- struct{}{}
+	time.Sleep(1 * time.Second)
 }
 
-func (cfg *InfluxConfig) Connect() error {
-	u, err := url.Parse(fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port))
-	if err != nil {
-		return err
-	}
+func (cfg *InfluxConfig) Connect() (client.Client, error) {
+	url := fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
 
-	conf := client.Config{
-		URL:      *u,
-		Username: cfg.User,
+	conf := client.HTTPConfig{
+		Addr:     url,
+		Username: cfg.Username,
 		Password: cfg.Password,
 	}
 
-	cfg.conn, err = client.NewClient(conf)
+	conn, err := client.NewHTTPClient(conf)
 	if err != nil {
-		return err
+		return conn, err
 	}
 
-	_, _, err = cfg.conn.Ping()
-	return err
+	_, _, err = conn.Ping(time.Second * 10)
+	return conn, err
 }
 
-func (cfg *InfluxConfig) Init() {
-	if verbose {
+func (cfg *InfluxConfig) NewSender(batchSize, queueSize, period int) (Sender, error) {
+	if len(cfg.DB) == 0 {
+		return nil, fmt.Errorf("no database specified")
+	}
+	if debug {
 		log.Println("Connecting to:", cfg.Host)
 	}
-	cfg.iChan = make(chan *client.BatchPoints, 65535)
-	if err := cfg.Connect(); err != nil {
-		log.Println("failed connecting to:", cfg.Host)
-		log.Println("error:", err)
-		log.Fatal(err)
+	pts := make(chan *client.Point, queueSize)
+	conn, err := cfg.Connect()
+	if err != nil {
+		return nil, fmt.Errorf("failed connecting to: %s", cfg.Host)
 	}
-	if verbose {
+	if debug {
 		log.Println("Connected to:", cfg.Host)
 	}
 
-	go influxEmitter(cfg)
-}
+	exists := func() bool {
+		q := client.Query{Command: "show databases"}
+		resp, err := conn.Query(q)
+		if err != nil {
+			log.Println("error querying for databases: ", err)
+			return false
+		}
+		for _, r := range resp.Results {
+			for _, s := range r.Series {
+				for _, v := range s.Values {
+					for _, x := range v {
+						if x.(string) == cfg.DB {
+							return true
+						}
+					}
+				}
+			}
+		}
+		return false
+	}
+	if !exists() {
+		return nil, fmt.Errorf("database %s does not exist", cfg.DB)
+	}
 
-func (c *InfluxConfig) Send(bps *client.BatchPoints) {
-	c.iChan <- bps
-}
+	bp, err := client.NewBatchPoints(cfg.Batch)
+	if err != nil {
+		return nil, err
+	}
 
-func (c *InfluxConfig) Hostname() string {
-	return strings.Split(c.Host, ":")[0]
-}
-
-// use chan as a queue so that interupted connections to
-// influxdb server don't drop collected data
-
-func influxEmitter(cfg *InfluxConfig) {
-	for {
-		select {
-		case data := <-cfg.iChan:
-			if testing {
+	go func() {
+		delay := time.Duration(period) * time.Second
+		tick := time.Tick(delay)
+		count := 0
+		for {
+			select {
+			case <-tick:
+				if len(bp.Points()) == 0 {
+					continue
+				}
+			case p := <-pts:
+				//fmt.Println("POINT:", p)
+				bp.AddPoint(p)
+				count++
+				if count < batchSize {
+					continue
+				}
+			case <-flush:
+				log.Println("FLUSHED")
 				break
 			}
-			if data == nil {
-				log.Println("null influx input")
-				continue
-			}
-
-			// keep trying until we get it (don't drop the data)
+			log.Println("SENDING:", count)
 			for {
-				if _, err := cfg.conn.Write(*data); err != nil {
-					cfg.incErrors()
+				if err := conn.Write(bp); err != nil {
 					log.Println("influxdb write error:", err)
-					// try again in a bit
-					// TODO: this could be better
 					time.Sleep(30 * time.Second)
 					continue
-				} else {
-					cfg.incSent()
 				}
+				bp, err = client.NewBatchPoints(cfg.Batch)
+				if err != nil {
+					log.Println("influxdb batchpoints error:", err)
+				}
+				log.Println("influxdb write count:", count)
+				count = 0
 				break
 			}
 		}
-	}
+	}()
+
+	//return func(pt *client.Point) error {
+	return func(key string, tags map[string]string, fields map[string]interface{}, ts time.Time) error {
+		pt, err := client.NewPoint(key, tags, fields, ts)
+		if err != nil {
+			return err
+		}
+		pts <- pt
+		return nil
+	}, nil
 }

@@ -10,7 +10,6 @@ community = public
 port   = 161 
 timeout = 20
 retries = 5
-repeat = 0
 freq   = 30
 ;debug  = false
 ; if port file is ommited than all columns will be retrieved
@@ -22,7 +21,6 @@ community = secret
 port   = 161 
 timeout = 20
 retries = 5
-repeat = 0
 freq   = 30
 portfile =  sample_ports.txt
 
@@ -32,7 +30,6 @@ community = secret
 port   = 161 
 timeout = 20
 retries = 5
-repeat = 0
 freq   = 30
 portfile =  sample_ports.txt
 ;use 'switch' config
