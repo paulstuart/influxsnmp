@@ -1,14 +1,31 @@
 package main
 
 import (
-	"text/template"
+	"html/template"
+	"time"
 )
 
 var (
-	tmpl = template.Must(template.New("home").Parse(page))
+	tmpl, errs, logs *template.Template
+	funcMap          = template.FuncMap{
+		"dateFmt": dateFmt,
+	}
+)
+
+func init() {
+	tmpl = template.Must(template.New("home").Funcs(funcMap).Parse(page))
 	errs = template.Must(template.New("errors").Parse(errors))
 	logs = template.Must(template.New("logs").Parse(logfiles))
-)
+	tmpl = tmpl.Funcs(funcMap)
+}
+
+func dateFmt(when interface{}) string {
+	t := when.(time.Time)
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(layout)
+}
 
 const (
 	page = `<!DOCTYPE html>
@@ -40,7 +57,9 @@ div {
 <p class="snmp">SNMP Stats for {{$key}}</p>
 <p>Get count: {{$stat.GetCnt}}</p>
 <p>Error count: {{$stat.ErrCnt}}</p>
-<p>Last error: {{$stat.Error}} ({{$stat.LastError}})</p>
+<p>Last error: {{$stat.Error}} ({{dateFmt $stat.LastError}})</p>
+{{/*
+*/}}
 </div>
 {{ end }}
 <p><a href="/logs">Logs files</a></p>
@@ -52,26 +71,13 @@ div {
 <p>Freq: {{$snmp.Freq}}</p>
 <p>Retries: {{$snmp.Retries}}</p>
 <p>Timeout: {{$snmp.Timeout}}</p>
-{{/*
-<p>Last Error: {{$snmp.LastError}}</p>
-<p>DB Host: {{$snmp.Influx.Hostname}}</p>
-<p>DB Name: {{$snmp.Influx.DB}}</p>
-<p>Errors: {{.Errors}}</p>
-<p>Requests: {{.Requests}}</p>
-<p>Replies: {{.Gets}}</p>
-<form action="/snmp/debug" method="POST">
-SNMP Debugging:<button type="submit" value="{{.DebugAction}}">{{.DebugAction}}</button>
-<input type="hidden" name="action" id="action" value="{{.DebugAction}}">
-<input type="hidden" name="host" id="host" value="{{.Host}}">
-</form>
-*/}}
 </div>
 {{ end}}
 {{ range $key,$influx := .Influx }}
 <div>
 <p class="snmp">Influx {{$key}}</p>
 <p>Host: {{$influx.Host}}</p>
-<p>Database: {{$influx.DB}}</p>
+<p>Database: {{$influx.Database}}</p>
 {{/*
 <p>Sent: {{$influx.Sent}}</p>
 <p>Errors: {{$influx.Errors}}</p>

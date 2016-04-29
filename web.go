@@ -13,12 +13,13 @@ import (
 	"strings"
 )
 
-type HFunc struct {
+// hFunc defines the path and the function associated with it
+type hFunc struct {
 	Path string
 	Func http.HandlerFunc
 }
 
-func MyIps() (ips []string) {
+func myIps() (ips []string) {
 	addrs, _ := net.InterfaceAddrs()
 	for _, addr := range addrs {
 		if ipnet, ok := addr.(*net.IPNet); ok && !strings.HasPrefix(ipnet.String(), "127.") && strings.Contains(ipnet.String(), ".") {
@@ -28,12 +29,12 @@ func MyIps() (ips []string) {
 	return
 }
 
-func FaviconPage(w http.ResponseWriter, r *http.Request) {
+func faviconPage(w http.ResponseWriter, r *http.Request) {
 	fav := "favicon.ico"
 	http.ServeFile(w, r, fav)
 }
 
-func HomePage(w http.ResponseWriter, r *http.Request) {
+func homePage(w http.ResponseWriter, r *http.Request) {
 	const layout = "Jan 2, 2006 at 3:04pm (MST)"
 
 	if err := tmpl.Execute(w, status()); err != nil {
@@ -52,7 +53,7 @@ func getErrors() []string {
 	return lines
 }
 
-func ErrorsPage(w http.ResponseWriter, r *http.Request) {
+func errorsPage(w http.ResponseWriter, r *http.Request) {
 	data := struct {
 		Errors  []string
 		LogFile string
@@ -65,25 +66,7 @@ func ErrorsPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func DebugPage(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "POST" {
-		r.ParseForm()
-		action := r.Form.Get("action")
-		host := r.Form.Get("host")
-		fmt.Println("debug action:", action, "host:", host, "debug", (action == "enable"))
-		/*
-			for _, c := range cfg.Snmp {
-				if host == c.Host {
-					c.debugging <- (action == "enable")
-					break
-				}
-			}
-		*/
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-	}
-}
-
-func LogsPage(w http.ResponseWriter, r *http.Request) {
+func logsPage(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Path
 	if i := strings.LastIndex(name, "/"); i >= 0 {
 		name = name[i:]
@@ -119,7 +102,7 @@ func LogsPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func LogsList(w http.ResponseWriter, r *http.Request) {
+func logsList(w http.ResponseWriter, r *http.Request) {
 	files, err := ioutil.ReadDir(logDir)
 	if err != nil {
 		fmt.Fprintln(w, err)
@@ -139,27 +122,23 @@ func LogsList(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-var webHandlers = []HFunc{
+var webHandlers = []hFunc{
 	{"/logs/", LogsPage},
 	{"/logs", LogsList},
 	{"/favicon.ico", FaviconPage},
 	{"/errors", ErrorsPage},
-	{"/snmp/debug", DebugPage},
-	{"/", HomePage},
+	{"/", homePage},
 }
 
 func webServer(port int) {
-	if port < 80 {
-		log.Fatal("Invalid port:", port)
-	}
 	for _, h := range webHandlers {
 		http.HandleFunc(h.Path, h.Func)
 	}
 
-	http_server := fmt.Sprintf(":%d", port)
+	server := fmt.Sprintf(":%d", port)
 	fmt.Println("Web interface:")
-	for _, ip := range MyIps() {
+	for _, ip := range myIps() {
 		fmt.Printf("http://%s:%d\n", ip, port)
 	}
-	http.ListenAndServe(http_server, nil)
+	http.ListenAndServe(server, nil)
 }

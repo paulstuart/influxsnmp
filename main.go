@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	client "github.com/influxdata/influxdb/client/v2"
 	"github.com/kardianos/osext"
 	snmp "github.com/paulstuart/snmputil"
 	"gopkg.in/gcfg.v1"
@@ -17,6 +18,7 @@ import (
 
 const layout = "2006-01-02 15:04:05"
 
+// SnmpConfig specifies the snmp device to probe
 type SnmpConfig struct {
 	Host      string `gcfg:"host"`
 	Community string `gcfg:"community"`
@@ -30,15 +32,14 @@ type SnmpConfig struct {
 	Mibs      string `gcfg:"mibs"`
 }
 
-type HTTPConfig struct {
-	Port int `gcfg:"port"`
+// CommonConfig specifies general parameters
+type CommonConfig struct {
+	HTTPPort int    `gcfg:"httpPort"`
+	LogDir   string `gcfg:"logDir"`
+	OidFile  string `gcfg:"oidFile"`
 }
 
-type GeneralConfig struct {
-	LogDir  string `gcfg:"logdir"`
-	OidFile string `gcfg:"oidfile"`
-}
-
+// MibConfig specifies what OIDs to query
 type MibConfig struct {
 	Scalers bool     `gcfg:"scalers"`
 	Name    string   `gcfg:"name"`
@@ -47,13 +48,29 @@ type MibConfig struct {
 	Keep    bool     `gcfg:"keep"`
 }
 
+// InfluxConfig defines connection requirements
+type InfluxConfig struct {
+	Host        string `gcfg:"host"`
+	Port        int    `gcfg:"port"`
+	Database    string `gcfg:"database"`
+	Username    string `gcfg:"username"`
+	Password    string `gcfg:"password"`
+	Retention   string `gcfg:"retention"`
+	Consistency string `gcfg:"consistency"`
+	SkipVerify  bool   `gcfg:"skip_verify"`
+	Timeout     int    `gcfg:"timeout"`
+	BatchSize   int    `gcfg:"batch_size"`
+	QueueSize   int    `gcfg:"queue_size"`
+	Flush       int    `gcfg:"flush"`
+}
+
+// SystemStatus provides operating statistics
 type SystemStatus struct {
 	Period, Started string
 	Uptime          string
 	DB, LogFile     string
-	DebugAction     string
-	Influx          map[string]*InfluxConfig
 	SNMP            map[string]*SnmpConfig
+	Influx          map[string]*InfluxConfig
 	SnmpStats       map[string]snmp.SnmpStats
 }
 
@@ -74,19 +91,21 @@ var (
 	errorMax      = 100
 	errorName     string
 	senders       = map[string]Sender{}
-	batchSize     = 1024
-	queueSize     = 65535
-	period        = 10
 	snmpStats     = map[string]chan snmp.StatsChan{}
 
 	cfg = struct {
-		Snmp    map[string]*SnmpConfig
-		Mibs    map[string]*MibConfig
-		Influx  map[string]*InfluxConfig
-		HTTP    HTTPConfig
-		General GeneralConfig
+		Snmp   map[string]*SnmpConfig
+		Mibs   map[string]*MibConfig
+		Influx map[string]*InfluxConfig
+		Common CommonConfig
 	}{}
 )
+
+func say(fmt string, args ...interface{}) {
+	if verbose {
+		log.Printf(fmt, args...)
+	}
+}
 
 func status() SystemStatus {
 	return SystemStatus{
@@ -94,12 +113,13 @@ func status() SystemStatus {
 		Started:   startTime.Format(layout),
 		Uptime:    time.Now().Sub(startTime).String(),
 		Period:    errorPeriod,
-		Influx:    cfg.Influx,
 		SNMP:      cfg.Snmp,
+		Influx:    cfg.Influx,
 		SnmpStats: Stats(),
 	}
 }
 
+// Stats returns the current snmp statistics
 func Stats() map[string]snmp.SnmpStats {
 	stats := map[string]snmp.SnmpStats{}
 	for name, c := range snmpStats {
@@ -151,13 +171,13 @@ func init() {
 	if err != nil {
 		log.Fatalf("Failed to parse gcfg data: %s", err)
 	}
-	httpPort = cfg.HTTP.Port
+	httpPort = cfg.Common.HTTPPort
 
-	if len(cfg.General.LogDir) > 0 {
-		logDir = cfg.General.LogDir
+	if len(cfg.Common.LogDir) > 0 {
+		logDir = cfg.Common.LogDir
 	}
-	if len(cfg.General.OidFile) > 0 {
-		oidFile = cfg.General.OidFile
+	if len(cfg.Common.OidFile) > 0 {
+		oidFile = cfg.Common.OidFile
 	}
 
 	// only run when one needs to see the interface names of the device
@@ -178,8 +198,7 @@ func init() {
 	os.Mkdir(logDir, 0755)
 
 	for name, c := range cfg.Influx {
-		c.Batch.Database = c.DB
-		sender, err := c.NewSender(batchSize, queueSize, period)
+		sender, err := makeSender(c)
 		if err != nil {
 			panic(err)
 		}
@@ -189,7 +208,7 @@ func init() {
 		panic(err)
 	}
 	var ferr error
-	errorName = fmt.Sprintf("error.%d.log", cfg.HTTP.Port)
+	errorName = fmt.Sprintf("error.%d.log", httpPort)
 	errorPath := filepath.Join(logDir, errorName)
 	errorLog, ferr = os.OpenFile(errorPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0664)
 	if ferr != nil {
@@ -201,15 +220,36 @@ func errFn(err error) {
 	log.Println(err)
 }
 
+func makeSender(cfg *InfluxConfig) (Sender, error) {
+	conf := client.HTTPConfig{
+		Addr:               fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port),
+		Username:           cfg.Username,
+		Password:           cfg.Password,
+		Timeout:            (time.Duration(cfg.Timeout) * time.Second),
+		InsecureSkipVerify: cfg.SkipVerify,
+	}
+	batch := client.BatchPointsConfig{
+		Precision:        "s",
+		Database:         cfg.Database,
+		RetentionPolicy:  cfg.Retention,
+		WriteConsistency: cfg.Consistency,
+	}
+	fmt.Println("DB:", cfg.Database)
+
+	return NewSender(conf, batch, cfg.BatchSize, cfg.QueueSize, cfg.Flush, errFn)
+}
+
 func gather(send Sender, c *SnmpConfig, mib *MibConfig) {
 	crit := snmp.Criteria{
 		OID:     mib.Name,
 		Regexps: mib.Regexps,
 		Keep:    mib.Keep,
 	}
+
 	name := fmt.Sprintf("%s/%s", c.Host, mib.Name)
 	status := make(chan snmp.StatsChan)
 	snmpStats[name] = status
+
 	p := snmp.Profile{
 		Host:      c.Host,
 		Community: c.Community,
@@ -223,6 +263,7 @@ func gather(send Sender, c *SnmpConfig, mib *MibConfig) {
 		values := map[string]interface{}{"value": value}
 		return send(name, tags, values, when)
 	}
+
 	if err := snmp.Bulkwalker(p, crit, sender, c.Freq, errFn, status); err != nil {
 		panic(err)
 	}
@@ -242,7 +283,7 @@ func main() {
 			for _, m := range strings.Fields(c.Mibs) {
 				mib, ok := cfg.Mibs[m]
 				if !ok {
-					panic("no mib found for: " + m)
+					panic("no mib config found for: " + m)
 				}
 				gather(send, c, mib)
 			}
