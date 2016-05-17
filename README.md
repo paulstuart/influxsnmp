@@ -1,7 +1,7 @@
 influxsnmp
 ==========
 Poll network devices via SNMP and save the data in InfluxDB (version 0.12.x)
-It uses [github.com/paulstuart/snmputil](https://github.com/paulstuart/snmputil) for snmp processing, and therefore the following functionality:
+It uses [github.com/paulstuart/snmputil](https://github.com/paulstuart/snmputil) for snmp processing, and therefore has the following functionality:
 
   * SNMP versions 1, 2, 2c, 3
   * Bulk polling of tabular data
