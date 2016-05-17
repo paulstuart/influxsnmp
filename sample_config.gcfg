@@ -16,9 +16,8 @@ port   = 161
 timeout = 20
 retries = 5
 freq   = 30
-;debug  = false
+aliases =  1/4=internet 1/2=dmz 1/3=production
 ; if port file is ommited than all columns will be retrieved
-portfile =  sample_ports.txt
 
 [snmp "switch"]
 host   = 192.168.1.2
@@ -27,7 +26,6 @@ port   = 161
 timeout = 20
 retries = 5
 freq   = 30
-portfile =  sample_ports.txt
 
 [snmp "switch2"]
 host   = 192.168.1.3
@@ -36,24 +34,17 @@ port   = 161
 timeout = 20
 retries = 5
 freq   = 30
-portfile =  sample_ports.txt
-;use 'switch' config
-config = switch
+mibs = switch
 
 ; this is a wildcard -- becomes default 
 ; if a 'snmp' section name is not otherwise specified
 [mibs "*"]
 name = ifXEntry
-scalers = false
-column = ifHCInOctets
-column = ifHCInUcastPkts
-column = ifHCOutOctets
-column = ifHCOutUcastPkts
+regexp = ifHC.*
 
 [mibs "switch"]
 name = ifXEntry
-column = ifHCInOctets
-column = ifHCOutOctets
+regexp = ifHC.*
 
 [influx "*"]
 host = localhost
@@ -68,9 +59,4 @@ port = 8086
 db   = otherdb
 user = othername
 password = otherpass 
-
-; web status monitor - set port to 0 to disable
-[http]
-port   = 8086 
-
 
