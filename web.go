@@ -123,10 +123,10 @@ func logsList(w http.ResponseWriter, r *http.Request) {
 }
 
 var webHandlers = []hFunc{
-	{"/logs/", LogsPage},
-	{"/logs", LogsList},
-	{"/favicon.ico", FaviconPage},
-	{"/errors", ErrorsPage},
+	{"/logs/", logsPage},
+	{"/logs", logsList},
+	{"/favicon.ico", faviconPage},
+	{"/errors", errorsPage},
 	{"/", homePage},
 }
 

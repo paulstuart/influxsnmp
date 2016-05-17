@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	client "github.com/influxdata/influxdb/client/v2"
@@ -27,9 +28,10 @@ type SnmpConfig struct {
 	Retries   int    `gcfg:"retries"`
 	Timeout   int    `gcfg:"timeout"`
 	Freq      int    `gcfg:"freq"`
-	PortFile  string `gcfg:"portfile"`
+	Aliases   string `gcfg:"aliases"`
 	Config    string `gcfg:"config"`
 	Mibs      string `gcfg:"mibs"`
+	Tags      string `gcfg:"tags"`
 }
 
 // CommonConfig specifies general parameters
@@ -37,12 +39,16 @@ type CommonConfig struct {
 	HTTPPort int    `gcfg:"httpPort"`
 	LogDir   string `gcfg:"logDir"`
 	OidFile  string `gcfg:"oidFile"`
+	Tags     string `gcfg:"tags"`
+	Mibs     string `gcfg:"mibs"`
+	MibFile  string `gcfg:"mibfile"`
 }
 
 // MibConfig specifies what OIDs to query
 type MibConfig struct {
 	Scalers bool     `gcfg:"scalers"`
 	Name    string   `gcfg:"name"`
+	Index   string   `gcfg:"index"`
 	Columns []string `gcfg:"column"`
 	Regexps []string `gcfg:"regexp"`
 	Keep    bool     `gcfg:"keep"`
@@ -59,10 +65,19 @@ type InfluxConfig struct {
 	Consistency string `gcfg:"consistency"`
 	SkipVerify  bool   `gcfg:"skip_verify"`
 	Timeout     int    `gcfg:"timeout"`
-	BatchSize   int    `gcfg:"batch_size"`
-	QueueSize   int    `gcfg:"queue_size"`
+	BatchSize   int    `gcfg:"batchSize"`
+	QueueSize   int    `gcfg:"queueSize"`
 	Flush       int    `gcfg:"flush"`
 }
+
+type snmpStats struct {
+	GetCnt    int
+	ErrCnt    int
+	LastError error
+	LastTime  time.Time
+}
+
+type statsFn func() snmpStats
 
 // SystemStatus provides operating statistics
 type SystemStatus struct {
@@ -71,19 +86,20 @@ type SystemStatus struct {
 	DB, LogFile     string
 	SNMP            map[string]*SnmpConfig
 	Influx          map[string]*InfluxConfig
-	SnmpStats       map[string]snmp.SnmpStats
+	SnmpStats       map[string]snmpStats
 }
 
 var (
+	wg            sync.WaitGroup
 	quit          = make(chan struct{})
 	verbose       bool
 	startTime     = time.Now()
-	testing       bool
 	snmpNames     bool
+	sample        bool
 	httpPort      = 8080
 	appdir, _     = osext.ExecutableFolder()
 	logDir        = filepath.Join(appdir, "log")
-	oidFile       = filepath.Join(appdir, "oids.txt")
+	oidFile       = filepath.Join(appdir, "oids.json")
 	configFile    = filepath.Join(appdir, "config.gcfg")
 	errorLog      *os.File
 	errorDuration = time.Duration(10 * time.Minute)
@@ -91,7 +107,9 @@ var (
 	errorMax      = 100
 	errorName     string
 	senders       = map[string]Sender{}
-	snmpStats     = map[string]chan snmp.StatsChan{}
+	statsMap      = make(map[string]statsFn)
+	logger        *log.Logger
+	commonTags    map[string]string
 
 	cfg = struct {
 		Snmp   map[string]*SnmpConfig
@@ -101,13 +119,21 @@ var (
 	}{}
 )
 
-func say(fmt string, args ...interface{}) {
-	if verbose {
-		log.Printf(fmt, args...)
+func getTags(list string) map[string]string {
+	t := make(map[string]string)
+	for _, item := range strings.Fields(list) {
+		if pair := strings.Split(item, "="); len(pair) == 2 {
+			t[pair[0]] = pair[1]
+		}
 	}
+	return t
 }
 
 func status() SystemStatus {
+	stats := map[string]snmpStats{}
+	for name, fn := range statsMap {
+		stats[name] = fn()
+	}
 	return SystemStatus{
 		LogFile:   errorName,
 		Started:   startTime.Format(layout),
@@ -115,25 +141,14 @@ func status() SystemStatus {
 		Period:    errorPeriod,
 		SNMP:      cfg.Snmp,
 		Influx:    cfg.Influx,
-		SnmpStats: Stats(),
+		SnmpStats: stats,
 	}
-}
-
-// Stats returns the current snmp statistics
-func Stats() map[string]snmp.SnmpStats {
-	stats := map[string]snmp.SnmpStats{}
-	for name, c := range snmpStats {
-		ret := make(chan snmp.SnmpStats)
-		c <- ret
-		stats[name] = <-ret
-	}
-	return stats
 }
 
 func flags() *flag.FlagSet {
 	var f flag.FlagSet
-	f.BoolVar(&testing, "testing", testing, "print data w/o saving")
 	f.BoolVar(&snmpNames, "names", snmpNames, "print column names and exit")
+	f.BoolVar(&sample, "sample", sample, "print a sample of collected values and exit")
 	f.StringVar(&configFile, "config", configFile, "config file")
 	f.BoolVar(&verbose, "verbose", verbose, "verbose mode")
 	f.IntVar(&httpPort, "http", httpPort, "http port")
@@ -180,22 +195,23 @@ func init() {
 		oidFile = cfg.Common.OidFile
 	}
 
-	// only run when one needs to see the interface names of the device
-	/*
-		if snmpNames {
-			for _, c := range cfg.Snmp {
-				fmt.Println("\nSNMP host:", c.Host)
-				fmt.Println("=========================================")
-				printSnmpNames(c)
-			}
-			os.Exit(0)
-		}
-	*/
+	commonTags = getTags(cfg.Common.Tags)
 
 	// re-read cmd line args to override as indicated
 	f = flags()
 	f.Parse(os.Args[1:])
 	os.Mkdir(logDir, 0755)
+
+	// Load or generate mib data
+	if len(cfg.Common.MibFile) > 0 {
+		if err := snmp.CachedMibInfo(cfg.Common.MibFile, cfg.Common.Mibs); err != nil {
+			panic(err)
+		}
+	} else {
+		if err := snmp.LoadMibs(cfg.Common.Mibs); err != nil {
+			panic(err)
+		}
+	}
 
 	for name, c := range cfg.Influx {
 		sender, err := makeSender(c)
@@ -204,9 +220,10 @@ func init() {
 		}
 		senders[name] = sender
 	}
-	if err := snmp.LoadOIDFile(oidFile); err != nil {
-		panic(err)
+	if verbose {
+		logger = log.New(os.Stderr, "", 0)
 	}
+
 	var ferr error
 	errorName = fmt.Sprintf("error.%d.log", httpPort)
 	errorPath := filepath.Join(logDir, errorName)
@@ -234,21 +251,46 @@ func makeSender(cfg *InfluxConfig) (Sender, error) {
 		RetentionPolicy:  cfg.Retention,
 		WriteConsistency: cfg.Consistency,
 	}
-	fmt.Println("DB:", cfg.Database)
 
 	return NewSender(conf, batch, cfg.BatchSize, cfg.QueueSize, cfg.Flush, errFn)
 }
 
+func pairs(s string) map[string]string {
+	m := make(map[string]string)
+	for _, p := range strings.Fields(s) {
+		b := strings.Split(p, "=")
+		if len(b) == 2 {
+			m[b[0]] = b[1]
+		}
+	}
+	return m
+}
+
 func gather(send Sender, c *SnmpConfig, mib *MibConfig) {
-	crit := snmp.Criteria{
-		OID:     mib.Name,
-		Regexps: mib.Regexps,
-		Keep:    mib.Keep,
+	if c.Freq < 1 {
+		panic("invalid polling frequency for: " + c.Host)
 	}
 
-	name := fmt.Sprintf("%s/%s", c.Host, mib.Name)
-	status := make(chan snmp.StatsChan)
-	snmpStats[name] = status
+	regexps := make([]string, 0, len(mib.Regexps))
+	for _, r := range mib.Regexps {
+		for _, x := range strings.Fields(r) {
+			regexps = append(regexps, x)
+		}
+	}
+
+	crit := snmp.Criteria{
+		OID:     mib.Name,
+		Index:   mib.Index,
+		Regexps: regexps,
+		Keep:    mib.Keep,
+		Tags:    getTags(c.Tags),
+		Freq:    c.Freq,
+		Aliases: pairs(c.Aliases),
+	}
+
+	for k, v := range commonTags {
+		crit.Tags[k] = v
+	}
 
 	p := snmp.Profile{
 		Host:      c.Host,
@@ -259,18 +301,54 @@ func gather(send Sender, c *SnmpConfig, mib *MibConfig) {
 		Timeout:   c.Timeout,
 	}
 
+	if sample {
+		sender, _ := snmp.DebugSender(nil, nil)
+		wg.Add(1)
+		go func() {
+			if err := snmp.Sampler(p, crit, sender); err != nil {
+				panic(err)
+			}
+			wg.Done()
+		}()
+		return
+	}
+
 	sender := func(name string, tags map[string]string, value interface{}, when time.Time) error {
 		values := map[string]interface{}{"value": value}
 		return send(name, tags, values, when)
 	}
 
-	if err := snmp.Bulkwalker(p, crit, sender, c.Freq, errFn, status); err != nil {
+	// influxdb saves uint64 as a string
+	// so this is a workaround for now
+	sender = snmp.IntegerSender(sender)
+
+	var stats snmpStats
+	var m sync.Mutex
+
+	errFn := func(err error) {
+		m.Lock()
+		if err == nil {
+			stats.GetCnt++
+		} else {
+			stats.ErrCnt++
+			stats.LastError = err
+			stats.LastTime = time.Now()
+		}
+		m.Unlock()
+	}
+	if err := snmp.Bulkwalker(p, crit, sender, errFn, logger); err != nil {
 		panic(err)
+	}
+
+	name := fmt.Sprintf("%s/%s", c.Host, mib.Name)
+	statsMap[name] = func() snmpStats {
+		m.Lock()
+		defer m.Unlock()
+		return stats
 	}
 }
 
 func main() {
-	snmp.Verbose = verbose
 	for name, c := range cfg.Snmp {
 		send, ok := senders[name]
 		if !ok {
@@ -296,6 +374,10 @@ func main() {
 			}
 		}
 		gather(send, c, mib)
+	}
+	if sample {
+		wg.Wait()
+		return
 	}
 	if httpPort > 0 {
 		webServer(httpPort)

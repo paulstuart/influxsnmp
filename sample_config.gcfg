@@ -1,3 +1,8 @@
+[common]
+httpPort   = 8085
+tags = dc=aws-east-1
+mibs = JUNIPER-IF-MIB:JUNIPER-MIB
+mibfile = /tmp/mibinfo.json
 
 ; multiple snmp devices can be specified
 ; their config name must match a mib config name

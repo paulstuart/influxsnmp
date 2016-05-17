@@ -7,12 +7,16 @@ import (
 	client "github.com/influxdata/influxdb/client/v2"
 )
 
+var (
+	retry = time.Second * 30
+)
+
 // Sender is a function that accepts the components of a datapoint
 type Sender func(string, map[string]string, map[string]interface{}, time.Time) error
 
 const (
 	// DefaultBatchSize is the default number points to batch before sending
-	DefaultBatchSize = 4096
+	DefaultBatchSize = 8192
 	// DefaultQueueSize is the default size the write queue
 	DefaultQueueSize = 65535
 	// DefaultFlush is the default of how often to send accumulated datapoints (in seconds)
@@ -117,6 +121,7 @@ func NewSender(
 					if errFunc != nil {
 						errFunc(err)
 					}
+					time.Sleep(retry)
 					continue
 				}
 				bp, _ = client.NewBatchPoints(batch)

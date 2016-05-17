@@ -57,7 +57,7 @@ div {
 <p class="snmp">SNMP Stats for {{$key}}</p>
 <p>Get count: {{$stat.GetCnt}}</p>
 <p>Error count: {{$stat.ErrCnt}}</p>
-<p>Last error: {{$stat.Error}} ({{dateFmt $stat.LastError}})</p>
+<p>Last error: {{$stat.LastError}} ({{dateFmt $stat.LastTime}})</p>
 {{/*
 */}}
 </div>

@@ -1,3 +1,0 @@
-# snmp_column   label_for_metrics         
-xe-0/0/1        aws_direct
-
