@@ -96,6 +96,7 @@ var (
 	startTime     = time.Now()
 	snmpNames     bool
 	sample        bool
+	dump          bool
 	httpPort      = 8080
 	appdir, _     = osext.ExecutableFolder()
 	logDir        = filepath.Join(appdir, "log")
@@ -106,6 +107,7 @@ var (
 	errorPeriod   = errorDuration.String()
 	errorMax      = 100
 	errorName     string
+	mibs          string
 	senders       = map[string]Sender{}
 	statsMap      = make(map[string]statsFn)
 	logger        *log.Logger
@@ -149,11 +151,13 @@ func flags() *flag.FlagSet {
 	var f flag.FlagSet
 	f.BoolVar(&snmpNames, "names", snmpNames, "print column names and exit")
 	f.BoolVar(&sample, "sample", sample, "print a sample of collected values and exit")
+	f.BoolVar(&dump, "dump", dump, "print output of parsed mibs and exit")
 	f.StringVar(&configFile, "config", configFile, "config file")
 	f.BoolVar(&verbose, "verbose", verbose, "verbose mode")
 	f.IntVar(&httpPort, "http", httpPort, "http port")
 	f.StringVar(&logDir, "logs", logDir, "log directory")
 	f.StringVar(&oidFile, "oids", oidFile, "OIDs file")
+	f.StringVar(&mibs, "mibs", mibs, "mibs to use")
 	f.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
 		f.VisitAll(func(flag *flag.Flag) {
@@ -301,6 +305,12 @@ func gather(send Sender, c *SnmpConfig, mib *MibConfig) {
 		Timeout:   c.Timeout,
 	}
 
+	if dump {
+		if err := snmp.OIDList(mibs, os.Stdout); err != nil {
+			panic(err)
+		}
+		return
+	}
 	if sample {
 		sender, _ := snmp.DebugSender(nil, nil)
 		wg.Add(1)
