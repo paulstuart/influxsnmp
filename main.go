@@ -54,8 +54,7 @@ type MibConfig struct {
 
 // InfluxConfig defines connection requirements
 type InfluxConfig struct {
-	Host        string `gcfg:"host"`
-	Port        int    `gcfg:"port"`
+	URL         string `gcfg:"url"`
 	Database    string `gcfg:"database"`
 	Username    string `gcfg:"username"`
 	Password    string `gcfg:"password"`
@@ -75,9 +74,9 @@ type snmpStats struct {
 	LastTime  time.Time
 }
 
-type statsFn func() snmpStats
+type statsFunc func() snmpStats
 
-type SnmpInfo struct {
+type snmpInfo struct {
 	Name   string
 	Config *SnmpConfig
 	MIB    *MibConfig
@@ -85,38 +84,36 @@ type SnmpInfo struct {
 
 // SystemStatus provides operating statistics
 type SystemStatus struct {
-	Period, Started string
-	Uptime          string
-	DB, LogFile     string
-	SNMP            map[string]*SnmpConfig
-	Influx          map[string]*InfluxConfig
-	SnmpStats       map[string]snmpStats
+	Period    string
+	Started   string
+	Uptime    string
+	DB        string
+	SNMP      map[string]*SnmpConfig
+	Influx    map[string]*InfluxConfig
+	SnmpStats map[string]snmpStats
 }
 
+// TimeStamp contains the start and stop time of PDU collection
 type TimeStamp snmp.TimeStamp
 
 var (
-	quit          = make(chan struct{})
-	verbose       bool
-	startTime     = time.Now()
-	snmpNames     bool
-	sample        bool
-	dump          bool
-	filter        bool
-	httpPort      = 8080
-	appdir, _     = osext.ExecutableFolder()
-	logDir        = filepath.Join(appdir, "log")
-	oidFile       = filepath.Join(appdir, "oids.json")
-	configFile    = filepath.Join(appdir, "config.gcfg")
-	errorLog      *os.File
-	errorDuration = time.Duration(10 * time.Minute)
-	errorPeriod   = errorDuration.String()
-	errorMax      = 100
-	errorName     string
-	mibs          string
-	statsMap      = make(map[string]statsFn)
-	logger        *log.Logger
-	commonTags    map[string]string
+	quit       = make(chan struct{})
+	verbose    bool
+	startTime  = time.Now()
+	snmpNames  bool
+	sample     bool
+	dump       bool
+	filter     bool
+	httpPort   = 8080
+	appdir, _  = osext.ExecutableFolder()
+	logDir     = filepath.Join(appdir, "log")
+	oidFile    = filepath.Join(appdir, "oids.json")
+	configFile = filepath.Join(appdir, "config.gcfg")
+	mibs       string
+	statsMap   = make(map[string]statsFunc)
+	logger     *log.Logger
+	commonTags map[string]string
+	sLock      sync.Mutex
 
 	cfg = struct {
 		Snmp   map[string]*SnmpConfig
@@ -126,7 +123,7 @@ var (
 	}{}
 )
 
-func Senders() map[string]Sender {
+func getSenders() map[string]Sender {
 	s := map[string]Sender{}
 	for name, c := range cfg.Influx {
 		sender, err := makeSender(c)
@@ -138,7 +135,7 @@ func Senders() map[string]Sender {
 	return s
 }
 
-func (c *SnmpConfig) Profile() snmp.Profile {
+func (c *SnmpConfig) profile() snmp.Profile {
 	return snmp.Profile{
 		Host:      c.Host,
 		Community: c.Community,
@@ -160,18 +157,12 @@ func getTags(list string) map[string]string {
 }
 
 func status() SystemStatus {
-	stats := map[string]snmpStats{}
-	for name, fn := range statsMap {
-		stats[name] = fn()
-	}
 	return SystemStatus{
-		LogFile:   errorName,
 		Started:   startTime.Format(layout),
 		Uptime:    time.Now().Sub(startTime).String(),
-		Period:    errorPeriod,
 		SNMP:      cfg.Snmp,
 		Influx:    cfg.Influx,
-		SnmpStats: stats,
+		SnmpStats: getStats(),
 	}
 }
 
@@ -252,14 +243,6 @@ func init() {
 	if verbose {
 		logger = log.New(os.Stderr, "", 0)
 	}
-
-	var ferr error
-	errorName = fmt.Sprintf("error.%d.log", httpPort)
-	errorPath := filepath.Join(logDir, errorName)
-	errorLog, ferr = os.OpenFile(errorPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0664)
-	if ferr != nil {
-		log.Fatal("Can't open error log:", ferr)
-	}
 }
 
 func errFn(err error) {
@@ -268,7 +251,7 @@ func errFn(err error) {
 
 func makeSender(cfg *InfluxConfig) (Sender, error) {
 	conf := client.HTTPConfig{
-		Addr:               fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port),
+		Addr:               cfg.URL,
 		Username:           cfg.Username,
 		Password:           cfg.Password,
 		Timeout:            (time.Duration(cfg.Timeout) * time.Second),
@@ -317,7 +300,23 @@ func prep(c *SnmpConfig, mib *MibConfig) (snmp.Profile, snmp.Criteria) {
 		crit.Tags[k] = v
 	}
 
-	return c.Profile(), crit
+	return c.profile(), crit
+}
+
+func addStats(name string, fn statsFunc) {
+	sLock.Lock()
+	statsMap[name] = fn
+	sLock.Unlock()
+}
+
+func getStats() map[string]snmpStats {
+	m := make(map[string]snmpStats)
+	sLock.Lock()
+	for k, fn := range statsMap {
+		m[k] = fn()
+	}
+	sLock.Unlock()
+	return m
 }
 
 func gather(send Sender, c *SnmpConfig, mib *MibConfig) {
@@ -328,7 +327,8 @@ func gather(send Sender, c *SnmpConfig, mib *MibConfig) {
 	p, crit := prep(c, mib)
 
 	sender := func(name string, tags map[string]string, value interface{}, ts snmp.TimeStamp) error {
-		values := map[string]interface{}{"value": value, "elapsed": ts.Stop.Sub(ts.Start)}
+		elapsed := int(ts.Stop.Sub(ts.Start).Nanoseconds() / 1000000)
+		values := map[string]interface{}{"value": value, "elapsed": elapsed}
 		return send(name, tags, values, ts.Stop)
 	}
 
@@ -355,16 +355,16 @@ func gather(send Sender, c *SnmpConfig, mib *MibConfig) {
 	}
 
 	name := fmt.Sprintf("%s/%s", c.Host, mib.Name)
-	statsMap[name] = func() snmpStats {
+	addStats(name, func() snmpStats {
 		m.Lock()
 		defer m.Unlock()
 		return stats
-	}
+	})
 }
 
 // agentList returns an array of snmp hosts and their associated mib info
-func agentList() ([]SnmpInfo, error) {
-	info := make([]SnmpInfo, 0, 32)
+func agentList() ([]snmpInfo, error) {
+	info := make([]snmpInfo, 0, 32)
 	for name, c := range cfg.Snmp {
 		if len(c.Mibs) > 0 {
 			for _, m := range strings.Fields(c.Mibs) {
@@ -372,7 +372,7 @@ func agentList() ([]SnmpInfo, error) {
 				if !ok {
 					return info, fmt.Errorf("no mib config found for:%s", m)
 				}
-				info = append(info, SnmpInfo{name, c, mib})
+				info = append(info, snmpInfo{name, c, mib})
 			}
 			continue
 		}
@@ -382,14 +382,14 @@ func agentList() ([]SnmpInfo, error) {
 				return info, fmt.Errorf("no mib config found for:%s", name)
 			}
 		}
-		info = append(info, SnmpInfo{name, c, mib})
+		info = append(info, snmpInfo{name, c, mib})
 	}
 	return info, nil
 }
 
 // filtered returns a list of all OIDs encountered by
 // polling the specified devices and their respective OIDs
-func filtered(a []SnmpInfo) []string {
+func filtered(a []snmpInfo) []string {
 	lookup, err := snmp.OIDNames(mibs)
 	if err != nil {
 		panic(err)
@@ -414,7 +414,7 @@ func filtered(a []SnmpInfo) []string {
 	}()
 
 	poll := func(cfg *SnmpConfig, oid string) {
-		client, err := snmp.NewClient(cfg.Profile())
+		client, err := snmp.NewClient(cfg.profile())
 		if err != nil {
 			panic(err)
 		}
@@ -439,14 +439,14 @@ func filtered(a []SnmpInfo) []string {
 	w1.Wait()
 
 	list := make([]string, 0, len(used))
-	for k, _ := range used {
+	for k := range used {
 		list = append(list, k)
 	}
 	return list
 }
 
 // sampler dumps a single fetch of data from each snmp host/mib
-func sampler(agents []SnmpInfo) error {
+func sampler(agents []snmpInfo) error {
 	var wg sync.WaitGroup
 	e := make(chan error)
 	cnt := 0
@@ -471,7 +471,8 @@ func sampler(agents []SnmpInfo) error {
 	return nil
 }
 
-func dumper(agents []SnmpInfo) error {
+// dumper creates a json file of parsed mib entries
+func dumper(agents []snmpInfo) error {
 	if len(mibs) == 0 {
 		return fmt.Errorf("error: no MIBs specified")
 	}
@@ -502,7 +503,7 @@ func main() {
 		return
 	}
 
-	senders := Senders()
+	senders := getSenders()
 	for _, a := range agents {
 		send, ok := senders[a.Name]
 		if !ok {
@@ -519,5 +520,4 @@ func main() {
 	} else {
 		<-quit
 	}
-	errorLog.Close()
 }

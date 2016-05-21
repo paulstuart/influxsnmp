@@ -16,8 +16,9 @@ port   = 161
 timeout = 20
 retries = 5
 freq   = 30
+; aliases use the column name as an index and override
+; the ifAlias entry if it exists
 aliases =  1/4=internet 1/2=dmz 1/3=production
-; if port file is ommited than all columns will be retrieved
 
 [snmp "switch"]
 host   = 192.168.1.2
@@ -45,10 +46,10 @@ regexp = ifHC.*
 [mibs "switch"]
 name = ifXEntry
 regexp = ifHC.*
+keep = true 
 
 [influx "*"]
-host = localhost
-port = 8086
+url = http://localhost:8086/
 db   = dbname
 user = username
 password = password
