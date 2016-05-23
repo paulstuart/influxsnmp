@@ -42,6 +42,7 @@ type CommonConfig struct {
 	Tags     string `gcfg:"tags"`
 	Mibs     string `gcfg:"mibs"`
 	MibFile  string `gcfg:"mibfile"`
+	Elapsed  bool   `gcfg:"elapsed"`
 }
 
 // MibConfig specifies what OIDs to query
@@ -312,13 +313,19 @@ func gather(send Sender, c *SnmpConfig, mib *MibConfig) {
 	}
 
 	p, crit := prep(c, mib)
-
-	sender := func(name string, tags map[string]string, value interface{}, ts snmp.TimeStamp) error {
-		elapsed := int(ts.Stop.Sub(ts.Start).Nanoseconds() / 1000000)
-		values := map[string]interface{}{"value": value, "elapsed": elapsed}
-		return send(name, tags, values, ts.Stop)
+	var sender snmp.Sender
+	if cfg.Common.Elapsed {
+		sender = func(name string, tags map[string]string, value interface{}, ts snmp.TimeStamp) error {
+			elapsed := int(ts.Stop.Sub(ts.Start).Nanoseconds() / 1000000)
+			values := map[string]interface{}{"value": value, "elapsed": elapsed}
+			return send(name, tags, values, ts.Stop)
+		}
+	} else {
+		sender = func(name string, tags map[string]string, value interface{}, ts snmp.TimeStamp) error {
+			values := map[string]interface{}{"value": value}
+			return send(name, tags, values, ts.Stop)
+		}
 	}
-
 	// influxdb saves uint64 as a string
 	// so this is a workaround for now
 	sender = snmp.IntegerSender(sender)
@@ -344,8 +351,9 @@ func gather(send Sender, c *SnmpConfig, mib *MibConfig) {
 	name := fmt.Sprintf("%s/%s", c.Host, mib.Name)
 	addStats(name, func() snmpStats {
 		m.Lock()
-		defer m.Unlock()
-		return stats
+		s := stats
+		m.Unlock()
+		return s
 	})
 }
 
