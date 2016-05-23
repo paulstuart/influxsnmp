@@ -73,7 +73,7 @@ div {
 {{ range $key,$influx := .Influx }}
 <div>
 <p class="snmp">Influx {{$key}}</p>
-<p>Host: {{$influx.Host}}</p>
+<p>Host: {{$influx.URL}}</p>
 <p>Database: {{$influx.Database}}</p>
 {{/*
 <p>Sent: {{$influx.Sent}}</p>
