@@ -2,6 +2,7 @@
 httpPort   = 8085
 tags = dc=aws-east-1
 mibs = JUNIPER-IF-MIB:JUNIPER-MIB
+; mibfile is mandatory
 mibfile = /tmp/mibinfo.json
 elapsed = true ; capture time elapsed for each value received
 
