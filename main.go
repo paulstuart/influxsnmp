@@ -146,16 +146,6 @@ func (c *SnmpConfig) profile() snmp.Profile {
 	}
 }
 
-func getTags(list string) map[string]string {
-	t := make(map[string]string)
-	for _, item := range strings.Fields(list) {
-		if pair := strings.Split(item, "="); len(pair) == 2 {
-			t[pair[0]] = pair[1]
-		}
-	}
-	return t
-}
-
 func status() SystemStatus {
 	return SystemStatus{
 		Started:   startTime.Format(layout),
@@ -191,6 +181,16 @@ func flags() *flag.FlagSet {
 	return &f
 }
 
+func pairs(list string) map[string]string {
+	t := make(map[string]string)
+	for _, item := range strings.Fields(list) {
+		if pair := strings.Split(item, "="); len(pair) == 2 {
+			t[pair[0]] = pair[1]
+		}
+	}
+	return t
+}
+
 func init() {
 	log.SetOutput(os.Stderr)
 
@@ -219,7 +219,7 @@ func init() {
 		oidFile = cfg.Common.OidFile
 	}
 
-	commonTags = getTags(cfg.Common.Tags)
+	commonTags = pairs(cfg.Common.Tags)
 
 	// re-read cmd line args to override as indicated
 	f = flags()
@@ -227,17 +227,15 @@ func init() {
 	os.Mkdir(logDir, 0755)
 
 	// Load or generate mib data
-	if len(cfg.Common.MibFile) > 0 {
-		if err := snmp.CachedMibInfo(cfg.Common.MibFile, cfg.Common.Mibs); err != nil {
-			panic(err)
-		}
-	} else {
-		if err := snmp.LoadMibs(cfg.Common.Mibs); err != nil {
-			panic(err)
-		}
+	if len(cfg.Common.MibFile) == 0 {
+		fmt.Println("no mibfile specified")
+		os.Exit(1)
 	}
 	if len(mibs) == 0 {
 		mibs = cfg.Common.Mibs
+	}
+	if err := snmp.LoadMIBs(cfg.Common.MibFile, mibs); err != nil {
+		panic(err)
 	}
 
 	if verbose {
@@ -267,17 +265,6 @@ func makeSender(cfg *InfluxConfig) (Sender, error) {
 	return NewSender(conf, batch, cfg.BatchSize, cfg.QueueSize, cfg.Flush, errFn)
 }
 
-func pairs(s string) map[string]string {
-	m := make(map[string]string)
-	for _, p := range strings.Fields(s) {
-		b := strings.Split(p, "=")
-		if len(b) == 2 {
-			m[b[0]] = b[1]
-		}
-	}
-	return m
-}
-
 func prep(c *SnmpConfig, mib *MibConfig) (snmp.Profile, snmp.Criteria) {
 	regexps := make([]string, 0, len(mib.Regexps))
 	for _, r := range mib.Regexps {
@@ -291,7 +278,7 @@ func prep(c *SnmpConfig, mib *MibConfig) (snmp.Profile, snmp.Criteria) {
 		Index:   mib.Index,
 		Regexps: regexps,
 		Keep:    mib.Keep,
-		Tags:    getTags(c.Tags),
+		Tags:    pairs(c.Tags),
 		Freq:    c.Freq,
 		Aliases: pairs(c.Aliases),
 	}
@@ -350,7 +337,7 @@ func gather(send Sender, c *SnmpConfig, mib *MibConfig) {
 		}
 		m.Unlock()
 	}
-	if err := snmp.Bulkwalker(p, crit, sender, errFn, logger); err != nil {
+	if err := snmp.Poller(p, crit, sender, errFn, logger); err != nil {
 		panic(err)
 	}
 
@@ -390,59 +377,22 @@ func agentList() ([]snmpInfo, error) {
 // filtered returns a list of all OIDs encountered by
 // polling the specified devices and their respective OIDs
 func filtered(a []snmpInfo) []string {
-	lookup, err := snmp.OIDNames(mibs)
-	if err != nil {
-		panic(err)
-	}
-
-	var w1, w2 sync.WaitGroup
-	valid := snmp.RootOID(lookup)
-	c := make(chan string, 1024)
-	used := make(map[string]struct{})
-
-	// queued access to updating used
-	w1.Add(1)
-	go func() {
-		for oid := range c {
-			root := valid(oid)
-			if len(root) == 0 {
-				panic("no root found for OID:" + oid)
-			}
-			used[root] = struct{}{}
-		}
-		w1.Done()
-	}()
-
-	poll := func(cfg *SnmpConfig, oid string) {
-		client, err := snmp.NewClient(cfg.profile())
-		if err != nil {
-			panic(err)
-		}
-		snmp.BulkWalkAll(client, oid, snmp.OIDCollector(c))
-		w2.Done()
-		client.Conn.Close()
-	}
-
+	var wg sync.WaitGroup
+	coll := snmp.NewCollector(mibs)
 	for _, s := range a {
 		for _, name := range strings.Fields(s.MIB.Name) {
-			oid, ok := lookup[name]
-			if !ok {
-				panic("No OID for name:" + name)
-			}
-			c <- oid
-			w2.Add(1)
-			go poll(s.Config, oid)
+			wg.Add(1)
+			go func(cfg *SnmpConfig, oid string) {
+				if err := coll.Poll(cfg.profile(), oid); err != nil {
+					log.Println("poller error:", err)
+				}
+				wg.Done()
+			}(s.Config, name)
 		}
 	}
-	w2.Wait()
-	close(c)
-	w1.Wait()
 
-	list := make([]string, 0, len(used))
-	for k := range used {
-		list = append(list, k)
-	}
-	return list
+	wg.Wait()
+	return coll.List()
 }
 
 // sampler dumps a single fetch of data from each snmp host/mib
