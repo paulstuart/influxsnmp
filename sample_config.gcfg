@@ -50,14 +50,13 @@ keep = true
 
 [influx "*"]
 url = http://localhost:8086/
-db   = dbname
+database = dbname
 user = username
 password = password
 
 [influx "switch"]
-host = 192.168.1.254
-port = 8086
-db   = otherdb
+url = http://192.168.1.254:8086/
+database = otherdb
 user = othername
 password = otherpass 
 
