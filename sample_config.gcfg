@@ -21,21 +21,22 @@ freq   = 30
 ; the ifAlias entry if it exists
 aliases =  1/4=internet 1/2=dmz 1/3=production
 
-[snmp "switch"]
-host   = 192.168.1.2
-community = secret
-port   = 161 
-timeout = 10
-retries = 1
-freq   = 30
-
-[snmp "switch2"]
-host   = 192.168.1.3
+[snmp "switches"]
+host   = 192.168.1.3 switch2 switch3
 community = secret
 port   = 161 
 timeout = 20
 freq   = 30
 mibs = switch
+
+[snmp "firewall"]
+host   = 192.168.1.254
+community = secret
+port   = 161 
+timeout = 20
+freq   = 30
+mibs = switch
+disabled = true ; ignore this config entry for now
 
 ; this is a wildcard -- becomes default 
 ; if a 'snmp' section name is not otherwise specified

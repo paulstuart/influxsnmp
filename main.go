@@ -32,6 +32,7 @@ type SnmpConfig struct {
 	Config    string `gcfg:"config"`
 	Mibs      string `gcfg:"mibs"`
 	Tags      string `gcfg:"tags"`
+	Disabled  bool   `gcfg:"disabled"`
 }
 
 // CommonConfig specifies general parameters
@@ -98,10 +99,9 @@ type SystemStatus struct {
 type TimeStamp snmp.TimeStamp
 
 var (
+	startTime  = time.Now()
 	quit       = make(chan struct{})
 	verbose    bool
-	startTime  = time.Now()
-	snmpNames  bool
 	sample     bool
 	dump       bool
 	filter     bool
@@ -136,15 +136,46 @@ func getSenders() map[string]Sender {
 	return s
 }
 
-func (c *SnmpConfig) profile() snmp.Profile {
-	return snmp.Profile{
-		Host:      c.Host,
-		Community: c.Community,
-		Version:   c.Version,
-		Port:      c.Port,
-		Retries:   c.Retries,
-		Timeout:   c.Timeout,
+func (c *SnmpConfig) profiles() []snmp.Profile {
+	hosts := strings.Fields(c.Host)
+	list := make([]snmp.Profile, 0, len(hosts))
+	for _, host := range hosts {
+		p := snmp.Profile{
+			Host:      host,
+			Community: c.Community,
+			Version:   c.Version,
+			Port:      c.Port,
+			Retries:   c.Retries,
+			Timeout:   c.Timeout,
+		}
+		list = append(list, p)
 	}
+	return list
+}
+
+func criteria(c *SnmpConfig, mib *MibConfig) snmp.Criteria {
+	regexps := make([]string, 0, len(mib.Regexps))
+	for _, r := range mib.Regexps {
+		for _, x := range strings.Fields(r) {
+			regexps = append(regexps, x)
+		}
+	}
+
+	crit := snmp.Criteria{
+		OID:     mib.Name,
+		Index:   mib.Index,
+		Regexps: regexps,
+		Keep:    mib.Keep,
+		Tags:    pairs(c.Tags),
+		Freq:    c.Freq,
+		Aliases: pairs(c.Aliases),
+	}
+
+	for k, v := range commonTags {
+		crit.Tags[k] = v
+	}
+
+	return crit
 }
 
 func status() SystemStatus {
@@ -159,7 +190,6 @@ func status() SystemStatus {
 
 func flags() *flag.FlagSet {
 	var f flag.FlagSet
-	f.BoolVar(&snmpNames, "names", snmpNames, "print column names and exit")
 	f.BoolVar(&sample, "sample", sample, "print a sample of collected values and exit")
 	f.BoolVar(&dump, "dump", dump, "print output of parsed mibs and exit")
 	f.BoolVar(&filter, "filter", filter, "print (filtered by used OIDs) output of parsed mibs and exit")
@@ -266,31 +296,6 @@ func makeSender(cfg *InfluxConfig) (Sender, error) {
 	return NewSender(conf, batch, cfg.BatchSize, cfg.QueueSize, cfg.Flush, errFn)
 }
 
-func prep(c *SnmpConfig, mib *MibConfig) (snmp.Profile, snmp.Criteria) {
-	regexps := make([]string, 0, len(mib.Regexps))
-	for _, r := range mib.Regexps {
-		for _, x := range strings.Fields(r) {
-			regexps = append(regexps, x)
-		}
-	}
-
-	crit := snmp.Criteria{
-		OID:     mib.Name,
-		Index:   mib.Index,
-		Regexps: regexps,
-		Keep:    mib.Keep,
-		Tags:    pairs(c.Tags),
-		Freq:    c.Freq,
-		Aliases: pairs(c.Aliases),
-	}
-
-	for k, v := range commonTags {
-		crit.Tags[k] = v
-	}
-
-	return c.profile(), crit
-}
-
 func addStats(name string, fn statsFunc) {
 	sLock.Lock()
 	statsMap[name] = fn
@@ -307,12 +312,10 @@ func getStats() map[string]snmpStats {
 	return m
 }
 
-func gather(send Sender, c *SnmpConfig, mib *MibConfig) {
-	if c.Freq < 1 {
-		panic("invalid polling frequency for: " + c.Host)
+func gather(send Sender, p snmp.Profile, crit snmp.Criteria, mibID string) {
+	if crit.Freq < 1 {
+		panic("invalid polling frequency for: " + p.Host)
 	}
-
-	p, crit := prep(c, mib)
 	var sender snmp.Sender
 	if cfg.Common.Elapsed {
 		sender = func(name string, tags map[string]string, value interface{}, ts snmp.TimeStamp) error {
@@ -348,7 +351,7 @@ func gather(send Sender, c *SnmpConfig, mib *MibConfig) {
 		panic(err)
 	}
 
-	name := fmt.Sprintf("%s/%s", c.Host, mib.Name)
+	name := fmt.Sprintf("%s/%s", p.Host, mibID)
 	addStats(name, func() snmpStats {
 		m.Lock()
 		s := stats
@@ -361,6 +364,9 @@ func gather(send Sender, c *SnmpConfig, mib *MibConfig) {
 func agentList() ([]snmpInfo, error) {
 	info := make([]snmpInfo, 0, 32)
 	for name, c := range cfg.Snmp {
+		if c.Disabled {
+			continue
+		}
 		if len(c.Mibs) > 0 {
 			for _, m := range strings.Fields(c.Mibs) {
 				mib, ok := cfg.Mibs[m]
@@ -389,13 +395,15 @@ func filtered(a []snmpInfo) []string {
 	coll := snmp.NewCollector(mibs)
 	for _, s := range a {
 		for _, name := range strings.Fields(s.MIB.Name) {
-			wg.Add(1)
-			go func(cfg *SnmpConfig, oid string) {
-				if err := coll.Poll(cfg.profile(), oid); err != nil {
-					log.Println("poller error:", err)
-				}
-				wg.Done()
-			}(s.Config, name)
+			for _, profile := range s.Config.profiles() {
+				wg.Add(1)
+				go func(p snmp.Profile, oid string) {
+					if err := coll.Poll(p, oid); err != nil {
+						log.Println("poller error:", err)
+					}
+					wg.Done()
+				}(profile, name)
+			}
 		}
 	}
 
@@ -404,29 +412,23 @@ func filtered(a []snmpInfo) []string {
 }
 
 // sampler dumps a single fetch of data from each snmp host/mib
-func sampler(agents []snmpInfo) error {
+func sampler(agents []snmpInfo) {
 	var wg sync.WaitGroup
-	e := make(chan error)
-	cnt := 0
 	sender, _ := snmp.DebugSender(nil, nil)
 	for _, a := range agents {
-		wg.Add(1)
-		cnt++
-		go func(c int, host string, config *SnmpConfig, mib *MibConfig) {
-			p, crit := prep(config, mib)
-			if err := snmp.Sampler(p, crit, sender); err != nil {
-				e <- err
-			}
-			wg.Done()
-		}(cnt, a.Config.Host, a.Config, a.MIB)
+		//profiles, crit := prep(a.Config, a.MIB)
+		for _, profile := range a.Config.profiles() {
+			wg.Add(1)
+			crit := criteria(a.Config, a.MIB)
+			go func(p snmp.Profile, crit snmp.Criteria) {
+				if err := snmp.Sampler(p, crit, sender); err != nil {
+					log.Printf("error sampling host %s: %s\n", p.Host, err)
+				}
+				wg.Done()
+			}(profile, crit)
+		}
 	}
 	wg.Wait()
-	select {
-	case err := <-e:
-		return err
-	default:
-	}
-	return nil
 }
 
 // dumper creates a json file of parsed mib entries
@@ -455,9 +457,7 @@ func main() {
 	}
 
 	if sample {
-		if err := sampler(agents); err != nil {
-			panic(err)
-		}
+		sampler(agents)
 		return
 	}
 
@@ -470,7 +470,9 @@ func main() {
 				panic("No sender for: " + a.Name)
 			}
 		}
-		go gather(send, a.Config, a.MIB)
+		for _, profile := range a.Config.profiles() {
+			go gather(send, profile, criteria(a.Config, a.MIB), a.Name)
+		}
 	}
 
 	if httpPort > 0 {
