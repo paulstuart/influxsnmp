@@ -17,3 +17,5 @@ influxsnmp uses a datafile of parsed MIB objects in order to use symbolic names 
 To create a MIB file of only the OIDs that will be used, run the following command:
 
     influxsnmp -dump -filter > mibFile.json
+
+As it is using snmptranslate to create the dump file, one can export MIBDIRS to point to the directories containing mib files

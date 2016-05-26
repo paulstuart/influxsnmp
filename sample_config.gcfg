@@ -1,9 +1,9 @@
 [common]
 httpPort   = 8085
 tags = dc=aws-east-1
-mibs = JUNIPER-IF-MIB:JUNIPER-MIB
-; mibfile is mandatory
-mibfile = /tmp/mibinfo.json
+mibs = JUNIPER-IF-MIB:JUNIPER-MIB:SNMPv2-MIB
+; mibfile is mandatory -- at least one must be specified
+mibfile = /tmp/mibinfo.json /tmp/mib2.json
 elapsed = true ; capture time elapsed for each value received
 
 ; multiple snmp devices can be specified
@@ -27,7 +27,7 @@ community = secret
 port   = 161 
 timeout = 20
 freq   = 30
-mibs = switch
+mibs = interfaces
 
 [snmp "firewall"]
 host   = 192.168.1.254
@@ -35,19 +35,21 @@ community = secret
 port   = 161 
 timeout = 20
 freq   = 30
-mibs = switch
+count = 60 
 disabled = true ; ignore this config entry for now
 
 ; this is a wildcard -- becomes default 
 ; if a 'snmp' section name is not otherwise specified
 [mibs "*"]
+name = sysName
+
+[mibs "interfaces"]
 name = ifXEntry
 regexp = ifHC.*
 
-[mibs "switch"]
-name = ifXEntry
-regexp = ifHC.*
-keep = true 
+[mibs "desc"]
+name = sysDescr
+count = 1
 
 [influx "*"]
 url = http://localhost:8086/

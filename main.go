@@ -28,6 +28,7 @@ type SnmpConfig struct {
 	Retries   int    `gcfg:"retries"`
 	Timeout   int    `gcfg:"timeout"`
 	Freq      int    `gcfg:"freq"`
+	Count     int    `gcfg:"count"`
 	Aliases   string `gcfg:"aliases"`
 	Config    string `gcfg:"config"`
 	Mibs      string `gcfg:"mibs"`
@@ -38,8 +39,6 @@ type SnmpConfig struct {
 // CommonConfig specifies general parameters
 type CommonConfig struct {
 	HTTPPort int    `gcfg:"httpPort"`
-	LogDir   string `gcfg:"logDir"`
-	OidFile  string `gcfg:"oidFile"`
 	Tags     string `gcfg:"tags"`
 	Mibs     string `gcfg:"mibs"`
 	MibFile  string `gcfg:"mibfile"`
@@ -52,6 +51,7 @@ type MibConfig struct {
 	Index   string   `gcfg:"index"`
 	Regexps []string `gcfg:"regexp"`
 	Keep    bool     `gcfg:"keep"`
+	Count   int      `gcfg:"count"`
 }
 
 // InfluxConfig defines connection requirements
@@ -100,15 +100,13 @@ type TimeStamp snmp.TimeStamp
 
 var (
 	startTime  = time.Now()
-	quit       = make(chan struct{})
+	quit       sync.WaitGroup
 	verbose    bool
 	sample     bool
 	dump       bool
 	filter     bool
 	httpPort   = 8080
 	appdir, _  = osext.ExecutableFolder()
-	logDir     = filepath.Join(appdir, "log")
-	oidFile    = filepath.Join(appdir, "oids.json")
 	configFile = filepath.Join(appdir, "config.gcfg")
 	mibs       string
 	statsMap   = make(map[string]statsFunc)
@@ -153,22 +151,26 @@ func (c *SnmpConfig) profiles() []snmp.Profile {
 	return list
 }
 
-func criteria(c *SnmpConfig, mib *MibConfig) snmp.Criteria {
-	regexps := make([]string, 0, len(mib.Regexps))
-	for _, r := range mib.Regexps {
+func criteria(s *SnmpConfig, m *MibConfig) snmp.Criteria {
+	regexps := make([]string, 0, len(m.Regexps))
+	for _, r := range m.Regexps {
 		for _, x := range strings.Fields(r) {
 			regexps = append(regexps, x)
 		}
 	}
-
+	count := s.Count
+	if m.Count > 0 {
+		count = m.Count
+	}
 	crit := snmp.Criteria{
-		OID:     mib.Name,
-		Index:   mib.Index,
+		OID:     m.Name,
+		Index:   m.Index,
 		Regexps: regexps,
-		Keep:    mib.Keep,
-		Tags:    pairs(c.Tags),
-		Freq:    c.Freq,
-		Aliases: pairs(c.Aliases),
+		Keep:    m.Keep,
+		Tags:    pairs(s.Tags),
+		Freq:    s.Freq,
+		Aliases: pairs(s.Aliases),
+		Count:   count,
 	}
 
 	for k, v := range commonTags {
@@ -188,30 +190,6 @@ func status() SystemStatus {
 	}
 }
 
-func flags() *flag.FlagSet {
-	var f flag.FlagSet
-	f.BoolVar(&sample, "sample", sample, "print a sample of collected values and exit")
-	f.BoolVar(&dump, "dump", dump, "print output of parsed mibs and exit")
-	f.BoolVar(&filter, "filter", filter, "print (filtered by used OIDs) output of parsed mibs and exit")
-	f.StringVar(&configFile, "config", configFile, "config file")
-	f.BoolVar(&verbose, "verbose", verbose, "verbose mode")
-	f.IntVar(&httpPort, "http", httpPort, "http port")
-	f.StringVar(&logDir, "logs", logDir, "log directory")
-	f.StringVar(&oidFile, "oids", oidFile, "OIDs file")
-	f.StringVar(&mibs, "mibs", mibs, "mibs to use")
-	f.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
-		f.VisitAll(func(flag *flag.Flag) {
-			format := "%10s: %s\n"
-			fmt.Fprintf(os.Stderr, format, "-"+flag.Name, flag.Usage)
-		})
-		fmt.Fprintf(os.Stderr, "\nAll settings can be set in config file: %s\n", configFile)
-		os.Exit(1)
-
-	}
-	return &f
-}
-
 func pairs(list string) map[string]string {
 	t := make(map[string]string)
 	for _, item := range strings.Fields(list) {
@@ -225,9 +203,14 @@ func pairs(list string) map[string]string {
 func init() {
 	log.SetOutput(os.Stderr)
 
-	// parse first time to see if config file is being specified
-	f := flags()
-	f.Parse(os.Args[1:])
+	flag.BoolVar(&sample, "sample", sample, "print a sample of collected values and exit")
+	flag.BoolVar(&dump, "dump", dump, "print output of parsed mibs and exit")
+	flag.BoolVar(&filter, "filter", filter, "(filtered by used OIDs) output of dump option")
+	flag.StringVar(&configFile, "config", configFile, "config file")
+	flag.BoolVar(&verbose, "verbose", verbose, "verbose mode")
+	flag.IntVar(&httpPort, "http", httpPort, "http port")
+	flag.StringVar(&mibs, "mibs", mibs, "mibs to use")
+	flag.Parse()
 
 	// now load up config settings
 	if _, err := os.Stat(configFile); err != nil {
@@ -243,30 +226,21 @@ func init() {
 	}
 	httpPort = cfg.Common.HTTPPort
 
-	if len(cfg.Common.LogDir) > 0 {
-		logDir = cfg.Common.LogDir
-	}
-	if len(cfg.Common.OidFile) > 0 {
-		oidFile = cfg.Common.OidFile
-	}
-
 	commonTags = pairs(cfg.Common.Tags)
 
-	// re-read cmd line args to override as indicated
-	f = flags()
-	f.Parse(os.Args[1:])
-	os.Mkdir(logDir, 0755)
+	if len(mibs) == 0 {
+		mibs = cfg.Common.Mibs
+	}
 
 	// Load or generate mib data
 	if len(cfg.Common.MibFile) == 0 {
 		fmt.Println("no mibfile specified")
 		os.Exit(1)
 	}
-	if len(mibs) == 0 {
-		mibs = cfg.Common.Mibs
-	}
-	if err := snmp.LoadMIBs(cfg.Common.MibFile, mibs); err != nil {
-		panic(err)
+	for _, file := range strings.Fields(cfg.Common.MibFile) {
+		if err := snmp.LoadMIBs(file, mibs); err != nil {
+			panic(err)
+		}
 	}
 
 	if verbose {
@@ -347,10 +321,6 @@ func gather(send Sender, p snmp.Profile, crit snmp.Criteria, mibID string) {
 		}
 		m.Unlock()
 	}
-	if err := snmp.Poller(p, crit, sender, errFn, logger); err != nil {
-		panic(err)
-	}
-
 	name := fmt.Sprintf("%s/%s", p.Host, mibID)
 	addStats(name, func() snmpStats {
 		m.Lock()
@@ -358,11 +328,15 @@ func gather(send Sender, p snmp.Profile, crit snmp.Criteria, mibID string) {
 		m.Unlock()
 		return s
 	})
+	if err := snmp.Poller(p, crit, sender, errFn, logger); err != nil {
+		panic(err)
+	}
+	quit.Done()
 }
 
 // agentList returns an array of snmp hosts and their associated mib info
 func agentList() ([]snmpInfo, error) {
-	info := make([]snmpInfo, 0, 32)
+	info := make([]snmpInfo, 0, len(cfg.Snmp))
 	for name, c := range cfg.Snmp {
 		if c.Disabled {
 			continue
@@ -416,7 +390,6 @@ func sampler(agents []snmpInfo) {
 	var wg sync.WaitGroup
 	sender, _ := snmp.DebugSender(nil, nil)
 	for _, a := range agents {
-		//profiles, crit := prep(a.Config, a.MIB)
 		for _, profile := range a.Config.profiles() {
 			wg.Add(1)
 			crit := criteria(a.Config, a.MIB)
@@ -440,6 +413,7 @@ func dumper(agents []snmpInfo) error {
 	if filter {
 		oids = filtered(agents)
 	}
+	fmt.Println("DUMP MIBS:", mibs, "OIDS:", oids)
 	return snmp.OIDList(mibs, oids, os.Stdout)
 }
 
@@ -450,6 +424,7 @@ func main() {
 	}
 
 	if dump {
+		fmt.Println("DUMP!", len(agents))
 		if err := dumper(agents); err != nil {
 			panic(err)
 		}
@@ -471,13 +446,13 @@ func main() {
 			}
 		}
 		for _, profile := range a.Config.profiles() {
+			quit.Add(1)
 			go gather(send, profile, criteria(a.Config, a.MIB), a.Name)
 		}
 	}
 
 	if httpPort > 0 {
-		webServer(httpPort)
-	} else {
-		<-quit
+		go webServer(httpPort)
 	}
+	quit.Wait()
 }
