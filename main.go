@@ -232,17 +232,6 @@ func init() {
 		mibs = cfg.Common.Mibs
 	}
 
-	// Load or generate mib data
-	if len(cfg.Common.MibFile) == 0 {
-		fmt.Println("no mibfile specified")
-		os.Exit(1)
-	}
-	for _, file := range strings.Fields(cfg.Common.MibFile) {
-		if err := snmp.LoadMIBs(file, mibs); err != nil {
-			panic(err)
-		}
-	}
-
 	if verbose {
 		logger = log.New(os.Stderr, "", 0)
 	}
@@ -413,7 +402,6 @@ func dumper(agents []snmpInfo) error {
 	if filter {
 		oids = filtered(agents)
 	}
-	fmt.Println("DUMP MIBS:", mibs, "OIDS:", oids)
 	return snmp.OIDList(mibs, oids, os.Stdout)
 }
 
@@ -424,11 +412,21 @@ func main() {
 	}
 
 	if dump {
-		fmt.Println("DUMP!", len(agents))
 		if err := dumper(agents); err != nil {
 			panic(err)
 		}
 		return
+	}
+
+	// Load or generate mib data
+	if len(cfg.Common.MibFile) == 0 {
+		fmt.Println("no mibfile specified")
+		os.Exit(1)
+	}
+	for _, file := range strings.Fields(cfg.Common.MibFile) {
+		if err := snmp.LoadMIBs(file, mibs); err != nil {
+			panic(err)
+		}
 	}
 
 	if sample {
