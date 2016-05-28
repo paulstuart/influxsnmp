@@ -151,33 +151,39 @@ func (c *SnmpConfig) profiles() []snmp.Profile {
 	return list
 }
 
-func criteria(s *SnmpConfig, m *MibConfig) snmp.Criteria {
+func criteria(s *SnmpConfig, m *MibConfig) []snmp.Criteria {
 	regexps := make([]string, 0, len(m.Regexps))
 	for _, r := range m.Regexps {
 		for _, x := range strings.Fields(r) {
 			regexps = append(regexps, x)
 		}
 	}
-	count := s.Count
-	if m.Count > 0 {
-		count = m.Count
-	}
-	crit := snmp.Criteria{
-		OID:     m.Name,
-		Index:   m.Index,
-		Regexps: regexps,
-		Keep:    m.Keep,
-		Tags:    pairs(s.Tags),
-		Freq:    s.Freq,
-		Aliases: pairs(s.Aliases),
-		Count:   count,
+
+	names := strings.Fields(m.Name)
+	list := make([]snmp.Criteria, 0, len(names))
+	for _, name := range names {
+		count := s.Count
+		if m.Count > 0 {
+			count = m.Count
+		}
+		crit := snmp.Criteria{
+			OID:     name,
+			Index:   m.Index,
+			Regexps: regexps,
+			Keep:    m.Keep,
+			Tags:    pairs(s.Tags),
+			Freq:    s.Freq,
+			Aliases: pairs(s.Aliases),
+			Count:   count,
+		}
+
+		for k, v := range commonTags {
+			crit.Tags[k] = v
+		}
+		list = append(list, crit)
 	}
 
-	for k, v := range commonTags {
-		crit.Tags[k] = v
-	}
-
-	return crit
+	return list
 }
 
 func status() SystemStatus {
@@ -380,14 +386,15 @@ func sampler(agents []snmpInfo) {
 	sender, _ := snmp.DebugSender(nil, nil)
 	for _, a := range agents {
 		for _, profile := range a.Config.profiles() {
-			wg.Add(1)
-			crit := criteria(a.Config, a.MIB)
-			go func(p snmp.Profile, crit snmp.Criteria) {
-				if err := snmp.Sampler(p, crit, sender); err != nil {
-					log.Printf("error sampling host %s: %s\n", p.Host, err)
-				}
-				wg.Done()
-			}(profile, crit)
+			for _, crit := range criteria(a.Config, a.MIB) {
+				wg.Add(1)
+				go func(p snmp.Profile, crit snmp.Criteria) {
+					if err := snmp.Sampler(p, crit, sender); err != nil {
+						log.Printf("error sampling host %s: %s\n", p.Host, err)
+					}
+					wg.Done()
+				}(profile, crit)
+			}
 		}
 	}
 	wg.Wait()
@@ -444,8 +451,10 @@ func main() {
 			}
 		}
 		for _, profile := range a.Config.profiles() {
-			quit.Add(1)
-			go gather(send, profile, criteria(a.Config, a.MIB), a.Name)
+			for _, crit := range criteria(a.Config, a.MIB) {
+				quit.Add(1)
+				go gather(send, profile, crit, a.Name)
+			}
 		}
 	}
 
