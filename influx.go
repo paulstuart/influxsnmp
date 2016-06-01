@@ -5,6 +5,7 @@ import (
 	"time"
 
 	client "github.com/influxdata/influxdb/client/v2"
+	"github.com/pkg/errors"
 )
 
 var (
@@ -74,7 +75,7 @@ func NewSender(
 	case client.HTTPConfig:
 		conn, err = client.NewHTTPClient(conf)
 		if err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "error creating HTTPClient")
 		}
 
 		_, _, err = conn.Ping(conf.Timeout)
@@ -83,12 +84,12 @@ func NewSender(
 		}
 
 		if err := dbCheck(conn, batch.Database); err != nil {
-			return nil, err
+			return nil, errors.Wrapf(err, "check for database %s failed", batch.Database)
 		}
 	case client.UDPConfig:
 		conn, err = client.NewUDPClient(conf)
 		if err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "error creating UDPClient")
 		}
 	}
 
@@ -96,7 +97,7 @@ func NewSender(
 
 	bp, err := client.NewBatchPoints(batch)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "batchpoints error")
 	}
 
 	go func() {
