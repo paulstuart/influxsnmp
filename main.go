@@ -324,7 +324,7 @@ func gather(send Sender, p snmp.Profile, crit snmp.Criteria, mibID string) {
 		return s
 	})
 	if err := snmp.Poller(p, crit, sender, errFn, logger); err != nil {
-		log.Println("SNMP polling error:", err)
+		log.Printf("error polling host %s: %s\n", p.Host, err)
 	}
 	quit.Done()
 }
