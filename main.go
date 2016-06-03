@@ -31,6 +31,7 @@ type SnmpConfig struct {
 	Count     int    `gcfg:"count"`
 	Aliases   string `gcfg:"aliases"`
 	Config    string `gcfg:"config"`
+	Rename    string `gcfg:"rename"`
 	Mibs      string `gcfg:"mibs"`
 	Tags      string `gcfg:"tags"`
 	Disabled  bool   `gcfg:"disabled"`
@@ -174,6 +175,7 @@ func criteria(s *SnmpConfig, m *MibConfig) []snmp.Criteria {
 			Tags:    pairs(s.Tags),
 			Freq:    s.Freq,
 			Aliases: pairs(s.Aliases),
+			Rename:  pairs(s.Rename),
 			Count:   count,
 		}
 

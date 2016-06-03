@@ -42,6 +42,7 @@ disabled = true ; ignore this config entry for now
 ; if a 'snmp' section name is not otherwise specified
 [mibs "*"]
 name = sysName
+rename = sysName=myNewName  ; rename entry
 
 [mibs "interfaces"]
 name = ifXEntry
