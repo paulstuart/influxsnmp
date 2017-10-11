@@ -31,3 +31,7 @@ config.gcfg
 ports.txt
 
 log
+
+# builds
+bin/*
+build/*
