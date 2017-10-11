@@ -1,0 +1,34 @@
+---
+version: 2
+jobs:
+  build:
+    working_directory: /go/src/github.com/wrboyce/influxsnmp
+    docker:
+      - image: golang:1.9.1
+    steps:
+      - checkout
+      - setup_remote_docker
+      - run:
+          name: Install Docker Client
+          command: curl -SL https://get.docker.com/builds/Linux/x86_64/docker-17.03.0-ce.tgz | tar -xzC /usr/bin --strip-components=1
+      - run:
+          name: Install Dependencies
+          command: make dep
+      - run:
+          name: Lint Code
+          command: make lint
+      - run:
+          name: Run Tests
+          command: make test
+      - run:
+          name: Build Releases
+          command: make -j release
+      - run:
+          name: Build Container
+          command: make container
+      - deploy:
+          name: Upload Releases
+          command: if git describe --exact-match --tags 2>/dev/null; then make release-upload; fi
+      - deploy:
+          name: Upload Container
+          command: docker login -u "${DOCKER_USER}" -p "${DOCKER_PASS}" && make BRANCH=${CIRCLE_BRANCH} container-upload
